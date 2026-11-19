@@ -78,7 +78,47 @@ fun AuthSheet(
             modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp)
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Third-party data warning (shown at sign-in)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = AccentAmber.copy(alpha = 0.12f)),
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, AccentAmber.copy(alpha = 0.5f))
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Warning,
+                    contentDescription = "Warning",
+                    tint = AccentAmber,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = "Third-party service warning",
+                        color = AccentAmber,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Your history, watchlist and profile sync are handled by third-party services. Please use a secondary email address, or continue without signing in.",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         Card(
             modifier = Modifier

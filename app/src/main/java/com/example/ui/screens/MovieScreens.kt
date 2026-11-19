@@ -726,6 +726,74 @@ fun LockoutScreen(viewModel: MovieViewModel) {
 }
 
 @Composable
+fun PrivacyWarningDialog(onDismiss: () -> Unit) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .wrapContentHeight(),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1D22)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 22.dp, vertical = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Warning,
+                    contentDescription = "Warning",
+                    tint = AccentAmber,
+                    modifier = Modifier.size(44.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Important notice",
+                    color = Color.White,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "CineVault uses third-party services for your history, watchlist and profile sync. For your safety, please use a secondary email address \u2014 or use the app without signing in.",
+                    color = Color(0xFFA6A6B0),
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Button(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = CinematicRed),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Text("I understand", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun TelegramJoinDialog(
     onDismiss: () -> Unit,
     telegramUrl: String = "https://t.me/+q5bGgCcZcFpiNWQ1"
@@ -1173,6 +1241,8 @@ fun MainContent(viewModel: MovieViewModel) {
     val cooldownPeriodMillis = 168L * 60 * 60 * 1000 // 168 hours (7 days)
     val shouldPromptTelegram = remember { (System.currentTimeMillis() - lastShownMillis) >= cooldownPeriodMillis }
     var showTelegramDialog by rememberSaveable { mutableStateOf(shouldPromptTelegram) }
+    val privacyWarningAlreadyShown = remember { prefs.getBoolean("privacy_warning_shown", false) }
+    var showPrivacyWarning by rememberSaveable { mutableStateOf(!privacyWarningAlreadyShown) }
     var lastBackPressTime by remember { mutableStateOf(0L) }
 
     // Back navigation across tabs
@@ -1432,8 +1502,18 @@ fun MainContent(viewModel: MovieViewModel) {
             }
         }
 
+        // One-time third-party service warning on first launch
+        if (showPrivacyWarning && viewModel.playInfo == null && updateInfo == null) {
+            PrivacyWarningDialog(
+                onDismiss = {
+                    prefs.edit().putBoolean("privacy_warning_shown", true).apply()
+                    showPrivacyWarning = false
+                }
+            )
+        }
+
         // Telegram Channel Welcome Popup on App Open (168-hour cooldown)
-        if (showTelegramDialog && viewModel.playInfo == null && updateInfo == null) {
+        if (showTelegramDialog && viewModel.playInfo == null && updateInfo == null && !showPrivacyWarning) {
             TelegramJoinDialog(
                 onDismiss = {
                     prefs.edit().putLong("last_telegram_prompt_timestamp", System.currentTimeMillis()).apply()
