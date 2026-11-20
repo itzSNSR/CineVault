@@ -26,6 +26,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.data.local.historyKey
+import com.example.data.local.resumePosition
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import java.security.MessageDigest
 import android.widget.Toast
@@ -41,7 +45,9 @@ data class ActiveDownload(
     val status: Int = android.app.DownloadManager.STATUS_RUNNING,
     val reason: Int = 0,
     val url: String = "",
-    val posterUrl: String = ""
+    val posterUrl: String = "",
+    val detail: String = "",
+    val bytesPerSecond: Long = 0
 )
 
 class MovieViewModel(application: Application) : AndroidViewModel(application) {
@@ -52,6 +58,27 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         database.movieDao(),
         prefs
     )
+
+    private val local = database.movieDao()
+    val recentSearches = local.recentSearches().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val favoriteChannels = local.favoriteChannels().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun rememberSearch(source: String, input: String) {
+        val term = input.trim().replace(Regex("\\s+"), " ")
+        if (term.isBlank()) return
+        viewModelScope.launch {
+            local.saveSearch(com.example.data.local.RecentSearch(source, term.lowercase(java.util.Locale.ROOT), term, System.currentTimeMillis()))
+        }
+    }
+
+    fun forgetSearch(entry: com.example.data.local.RecentSearch) = viewModelScope.launch {
+        local.deleteSearch(entry.source, entry.normalized)
+    }
+    fun clearSearchHistory() = viewModelScope.launch { local.clearSearches() }
+
+    fun toggleChannel(key: String, country: String, name: String, saved: Boolean) = viewModelScope.launch {
+        if (saved) local.removeChannel(key) else local.saveChannel(com.example.data.local.FavoriteChannel(key, country, name))
+    }
 
     // Developer and Sandbox / Lockout State
     var isDeveloper by mutableStateOf(prefs.isDeveloper)
@@ -145,6 +172,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     var isPlaying by mutableStateOf(false)
     var playbackProgressMs by mutableStateOf(0L)
     var isPlaybackLoading by mutableStateOf(false)
+    val sessionPlaybackSpeed = mutableStateOf(1f)
     var mediaDurationMs by mutableStateOf(0L)
     var isLiveTvPlaying by mutableStateOf(false)
 
@@ -492,8 +520,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     // Download Cache State (Kept in memory for instant screen opening)
     var downloadedFiles by mutableStateOf<List<java.io.File>>(emptyList())
     var activeDownloads by mutableStateOf<List<ActiveDownload>>(emptyList())
-    var inAppDownloads by mutableStateOf<List<ActiveDownload>>(emptyList())
-    private val inAppDownloadJobs = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.Job>()
+
     var isDownloadScanLoaded by mutableStateOf(false)
     var playingDownloadedFile by mutableStateOf<java.io.File?>(null)
 
@@ -513,6 +540,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     var updateStatusMessage by mutableStateOf("")
 
     init {
+        viewModelScope.launch(Dispatchers.IO) { com.example.data.download.DownloadQueue.restore(application) }
         if (prefs.mockHost.contains("10.0.2.2") || prefs.mockHost.contains("run.app") || prefs.mockHost.contains("ais-dev-") || prefs.mockHost.isEmpty()) {
             prefs.mockHost = "http://127.0.0.1:3000"
             mockHost = "http://127.0.0.1:3000"
@@ -786,7 +814,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     .flatMap { dir ->
                         dir.walkTopDown()
                             .maxDepth(4)
-                            .filter { it.isFile && it.extension.equals("mp4", ignoreCase = true) }
+                            .filter { it.isFile && it.extension.lowercase() in setOf("mp4", "ts", "mkv") }
                             .toList()
                     }
                     .distinctBy { it.absolutePath }
@@ -804,8 +832,48 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
+    private var detailJob: Job? = null
+    private var seasonJob: Job? = null
+    private var playbackJob: Job? = null
+    private val playbackPrefs = application.getSharedPreferences("playback_preferences", 0)
+    var subtitlesOff by mutableStateOf(playbackPrefs.getBoolean("subtitles_off", false))
+        private set
+    var embeddedLanguage by mutableStateOf(playbackPrefs.getString("embedded_language", null))
+        private set
+    var playbackEntry by mutableStateOf<HistoryEntity?>(null)
+        private set
+
+    fun chooseEmbedded(language: String?) {
+        embeddedLanguage = language ?: "und"
+        selectedSubtitle = null
+        subtitlesOff = false
+        playbackPrefs.edit().putString("embedded_language", embeddedLanguage).putBoolean("subtitles_off", false).apply()
+    }
+
+    fun chooseSubtitle(subtitle: SubtitleItem?) {
+        embeddedLanguage = null
+        subtitlesOff = subtitle == null
+        selectedSubtitle = subtitle
+        playbackPrefs.edit().remove("embedded_language").putBoolean("subtitles_off", subtitlesOff).apply {
+            if (subtitle != null) putString("subtitle_language", subtitle.language)
+        }.apply()
+    }
+
+    fun cancelPlaybackRequest() {
+        playbackJob?.cancel()
+        isPlaybackLoading = false
+    }
+
+    fun closeDetail() {
+        cancelPlaybackRequest()
+        detailJob?.cancel()
+        seasonJob?.cancel()
+        selectedSubject = null
+    }
+
     fun switchProvider(provider: String) {
         if (activeProvider == provider) return
+        closeDetail()
         prefs.activeProvider = provider
         activeProvider = provider
 
@@ -1659,6 +1727,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     private var searchJob: kotlinx.coroutines.Job? = null
 
     fun searchMovies(query: String, immediate: Boolean = false) {
+        if (immediate) rememberSearch(activeProvider, query)
         searchQuery = query
         searchPage = 1
         canSearchLoadMore = true
@@ -1760,6 +1829,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectSubject(subject: MovieSubject) {
+        closeDetail()
         maxSeasonLimitConstraint = parseMaxSeasonFromName(subject.name)
         currentEpisode = null
         playInfo = null
@@ -1772,7 +1842,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         if (subject.id.startsWith("tmdb_") && !isAniFam) {
             selectedSubject = subject
             originalSubjectDetail = subject
-            viewModelScope.launch {
+            detailJob = viewModelScope.launch {
                 try {
                     val searchResults = repository.search(subject.name)
                     val matched = searchResults.firstOrNull { 
@@ -1783,6 +1853,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
                     if (matched != null) {
                         val fullDetail = repository.getDetail(matched.id)
+                        ensureActive()
                         if (fullDetail != null) {
                             setupSubjectWithDetail(fullDetail)
                             selectedSubject = fullDetail
@@ -1798,7 +1869,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (e: Exception) {
                     android.util.Log.e("MovieViewModel", "Error resolving TMDB subject to MovieBox", e)
                 } finally {
-                    isLoadingEpisodes = false
+                    if (isActive) isLoadingEpisodes = false
                 }
             }
             return
@@ -1821,9 +1892,10 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             selectedResource = autoMatch
         }
         
-        viewModelScope.launch {
+        detailJob = viewModelScope.launch {
             try {
                 val recs = repository.getDetailRec(subject.id)
+                ensureActive()
                 detailRecommendations = recs
                 // Warm up recommendation poster images immediately like Vega
                 val app = getApplication<Application>()
@@ -1845,6 +1917,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             }
             try {
                 val fullDetail = repository.getDetail(subject.id)
+                ensureActive()
                 if (fullDetail != null) {
                     setupSubjectWithDetail(fullDetail)
                     if (isAniFam) {
@@ -1855,6 +1928,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     if (!isAniFam && currentAutoMatch != null && currentAutoMatch.resourceId.startsWith("dub_")) {
                         val dubSubjectId = currentAutoMatch.resourceId.substringAfter("dub_")
                         val dubDetail = repository.getDetail(dubSubjectId)
+                        ensureActive()
                         if (dubDetail != null) {
                             selectedSubject = dubDetail
                             val rawSeasons = if (dubDetail.isTvShow) dubDetail.seasonList.filter { it.episodeList.isNotEmpty() }.map { it.season }.sorted() else emptyList()
@@ -1871,62 +1945,90 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 android.util.Log.e("MovieViewModel", "Failed to fetch full subject detail", e)
             } finally {
-                isLoadingEpisodes = false
+                if (isActive) isLoadingEpisodes = false
             }
         }
     }
 
     fun loadEpisodesForSeason(season: Int) {
+        seasonJob?.cancel()
         selectedSeason = season
-        val activeSubjectId = if (!isAniFam && selectedResource?.resourceId?.startsWith("dub_") == true) {
-            selectedResource!!.resourceId.substringAfter("dub_")
-        } else {
-            originalSubjectDetail?.id ?: selectedSubject?.id ?: return
-        }
         isLoadingEpisodes = true
-        viewModelScope.launch {
+        seasonJob = viewModelScope.launch {
+            detailJob?.join()
+            selectedSeason = season
             try {
-                episodesList = repository.getEpisodes(activeSubjectId, season)
+                val activeSubjectId = selectedResource?.resourceId?.takeIf { !isAniFam && it.startsWith("dub_") }
+                    ?.removePrefix("dub_") ?: selectedSubject?.id ?: return@launch
+                val result = repository.getEpisodes(activeSubjectId, season)
+                ensureActive()
+                episodesList = result
             } catch (e: Exception) {
                 android.util.Log.e("MovieViewModel", "Failed to load episodes for season $season", e)
             } finally {
-                isLoadingEpisodes = false
+                if (isActive) isLoadingEpisodes = false
             }
         }
     }
 
-    fun selectEpisode(episode: Episode) {
-        currentEpisode = episode
-        val subject = selectedSubject ?: return
-        isPlaybackLoading = true
-        viewModelScope.launch {
-            try {
-                val resolvedPlayInfo = repository.getPlayInfo(
-                    subject.id,
-                    episode.seasonNumber,
-                    episode.episodeNumber,
-                    resourceId = selectedResource?.resourceId
-                )
-                // Fetch history before setting playInfo to prevent race condition with ExoPlayer
-                val historyId = "${subject.id}_S${episode.seasonNumber}_E${episode.episodeNumber}"
-                val existingProgress = repository.getHistoryById(historyId)
-                if (existingProgress != null) {
-                    playbackProgressMs = existingProgress.seeTime
-                    mediaDurationMs = existingProgress.totalTime
-                } else {
-                    playbackProgressMs = 0L
-                    mediaDurationMs = 0L
-                }
+    fun selectEpisode(episode: Episode) = resolvePlayback(episode, false)
+    fun selectMovieDirect() = resolvePlayback(null, false)
 
-                selectedStream = selectStreamByPreference(resolvedPlayInfo.streamList, defaultStreamQuality)
-                val isDubSelected = selectedResource?.name?.contains("dub", ignoreCase = true) == true
-                selectedSubtitle = if (isDubSelected) null else (resolvedPlayInfo.subTitleList.find { it.language.contains("eng", ignoreCase = true) } ?: resolvedPlayInfo.subTitleList.firstOrNull())
+    fun resumeHistory(entry: HistoryEntity, startOver: Boolean = false) {
+        val raw = entry.subjectId.removePrefix("moviebox_").removePrefix("anifam_")
+        val providerId = if (isAniFam) "anifam_$raw" else raw
+        selectSubject(MovieSubject(id = providerId, name = entry.name, poster = entry.poster, isTvShow = entry.isTvShow))
+        resolvePlayback(null, startOver, entry)
+    }
+
+    private fun resolvePlayback(requested: Episode?, startOver: Boolean, history: HistoryEntity? = null) {
+        playbackJob?.cancel()
+        playInfo = null
+        selectedSubtitle = null
+        selectedStream = null
+        isPlaybackLoading = true
+        playbackJob = viewModelScope.launch {
+            try {
+                detailJob?.join()
+                seasonJob?.join()
+                val subject = selectedSubject ?: return@launch
+                val ep = if (subject.isTvShow || requested != null) {
+                    val season = history?.season ?: requested?.seasonNumber ?: selectedSeason
+                    if (season != selectedSeason || episodesList.isEmpty()) {
+                        val loaded = repository.getEpisodes(subject.id, season)
+                        ensureActive()
+                        selectedSeason = season
+                        episodesList = loaded
+                    }
+                    val number = history?.episode ?: requested?.episodeNumber
+                    episodesList.firstOrNull { number == null || it.episodeNumber == number }
+                        ?: requested ?: throw IllegalStateException("Episode unavailable")
+                } else null
+                val season = ep?.seasonNumber ?: 0
+                val episode = ep?.episodeNumber ?: 0
+                val id = historyKey(isAniFam, subject.id, season, episode)
+                val info = repository.getPlayInfo(subject.id, season, episode, resourceId = selectedResource?.resourceId)
+                val rawKey = id.substringAfter('_')
+                val saved = repository.getHistoryById(id) ?: repository.getHistoryById(rawKey) ?: history
+                ensureActive()
+                currentEpisode = ep
+                playbackEntry = HistoryEntity(id, subject.id, subject.name, subject.poster, subject.isTvShow, season, episode, 0, 0)
+                playbackProgressMs = if (startOver) 0 else saved?.resumePosition ?: 0
+                mediaDurationMs = saved?.totalTime ?: 0
+                val preferred = playbackPrefs.getString("subtitle_language", null)
+                selectedSubtitle = when {
+                    subtitlesOff || embeddedLanguage != null -> null
+                    preferred != null -> info.subTitleList.firstOrNull { it.language.equals(preferred, true) }
+                    selectedResource?.name?.contains("dub", true) == true -> null
+                    else -> info.subTitleList.firstOrNull { it.language.contains("eng", true) } ?: info.subTitleList.firstOrNull()
+                }
+                selectedStream = selectStreamByPreference(info.streamList, defaultStreamQuality)
                 isPlaying = true
-                playInfo = resolvedPlayInfo
+                playInfo = info
             } catch (e: Exception) {
-                android.util.Log.e("MovieViewModel", "Failed to fetch episode play info", e)
+                if (isActive) safeToast(getApplication(), e.message ?: "Unable to open stream")
             } finally {
-                isPlaybackLoading = false
+                if (isActive) isPlaybackLoading = false
             }
         }
     }
@@ -2098,19 +2200,24 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         subject: MovieSubject,
         episode: com.example.data.model.Episode
     ) {
-        safeToast(context, "Download started...", Toast.LENGTH_SHORT)
+        downloadResolved(context, subject, episode)
+    }
+
+    fun downloadMovie(context: android.content.Context, subject: MovieSubject) = downloadResolved(context, subject, null)
+
+    private fun downloadResolved(context: android.content.Context, subject: MovieSubject, episode: Episode?) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val resId = selectedResource?.resourceId
                 val downloadResId = selectedResource?.resourceId?.ifBlank { null } ?: "sub"
                 val playInfoResult = repository.getPlayInfo(
                     subject.id,
-                    episode.seasonNumber,
-                    episode.episodeNumber,
-                    quality = defaultStreamQuality,
+                    episode?.seasonNumber ?: 0,
+                    episode?.episodeNumber ?: 0,
+                    quality = defaultDownloadQuality,
                     resourceId = if (isAniFam) downloadResId else resId
                 )
-                val stream = selectStreamByPreference(playInfoResult.streamList, defaultStreamQuality)
+                val stream = selectStreamByPreference(playInfoResult.streamList, defaultDownloadQuality)
                     ?: selectHighestQualityStream(playInfoResult.streamList)
                     ?: playInfoResult.streamList.firstOrNull()
 
@@ -2120,9 +2227,9 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                val safeTitle = "${subject.name} S${episode.seasonNumber}E${episode.episodeNumber.toString().padStart(2, '0')}"
+                val safeTitle = if (episode == null) subject.name else "${subject.name} S${episode.seasonNumber}E${episode.episodeNumber.toString().padStart(2, '0')}"
                 val cookies = stream?.cookie ?: ""
-                startDownload(context, subject, safeTitle, streamUrl, cookies, playInfoResult.subTitleList)
+                startDownload(context, subject, safeTitle, streamUrl, cookies, playInfoResult.subTitleList, stream?.quality ?: defaultDownloadQuality, episode)
             } catch (e: Exception) {
                 safeToast(context, "Download failed: ${e.message}")
             }
@@ -2135,10 +2242,38 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         safeTitle: String,
         streamUrl: String,
         cookies: String = "",
-        subtitles: List<com.example.data.model.SubtitleItem> = emptyList()
+        subtitles: List<com.example.data.model.SubtitleItem> = emptyList(),
+        quality: String = defaultDownloadQuality,
+        episode: Episode? = currentEpisode
     ) {
-        val cleanTitle = safeTitle.replace(Regex("[^a-zA-Z0-9.-]"), "_")
-        val isAniFamStream = isAniFam ||
+        val provider = activeProvider
+        val language = selectedResource?.resourceId.orEmpty()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                fun safeName(value: String) = value.trim().replace(Regex("[^\\p{L}\\p{N}.-]"), "_")
+                    .trim('.').take(110).ifBlank { "Video" }
+                val show = safeName(subject.name)
+                val clean = safeName(safeTitle)
+                val variant = safeName(quality)
+                val folder = getEpisodeStorageDir(context, show, "${clean}_$variant")
+                val headers = downloadHeaders(streamUrl, cookies, provider == PreferencesManager.PROVIDER_ANIFAM)
+                val media = historyKey(provider == PreferencesManager.PROVIDER_ANIFAM, subject.id, episode?.seasonNumber ?: 0, episode?.episodeNumber ?: 0)
+                val key = listOf(media, language, quality.lowercase(java.util.Locale.ROOT)).joinToString("|")
+                val queued = com.example.data.download.DownloadQueue.enqueue(context.applicationContext, key, "$safeTitle · $quality",
+                    streamUrl, headers, folder, subject.poster, quality)
+                if (queued) {
+                    downloadShowPosterOnce(show, subject.poster, folder.parentFile!!)
+                    downloadAllSubtitles(folder, clean, subtitles)
+                    safeToast(context, "Queued · $safeTitle")
+                } else safeToast(context, "Already downloaded or queued")
+            } catch (e: Exception) {
+                safeToast(context, e.message ?: "Unable to queue download")
+            }
+        }
+    }
+
+    private fun downloadHeaders(streamUrl: String, cookies: String, ani: Boolean): Map<String, String> {
+        val isAniFamStream = ani ||
                 streamUrl.contains("zokoanime", ignoreCase = true) ||
                 streamUrl.contains("dramahot", ignoreCase = true) ||
                 streamUrl.contains("anifam", ignoreCase = true) ||
@@ -2148,273 +2283,71 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 streamUrl.contains("laggedduringcutscene", ignoreCase = true) ||
                 streamUrl.contains("anipixcdn", ignoreCase = true)
 
-        if (streamUrl.contains(".m3u8", ignoreCase = true) || isAniFamStream) {
-            startHlsDownload(context, subject, cleanTitle, streamUrl, cookies, subtitles)
-        } else {
-            val safeShowName = subject.name.trim().replace(Regex("[^a-zA-Z0-9.-]"), "_")
-            val epDir = getEpisodeStorageDir(context, safeShowName, cleanTitle)
-            downloadAllSubtitles(epDir, cleanTitle, subtitles)
-            com.example.ui.screens.downloadVideo(
-                context, streamUrl, cleanTitle, subject.poster, showToast = false,
-                safeShowPrefixOverride = safeShowName, subtitles = subtitles
-            )
-        }
-    }
+        var defaultUserAgent = if (isAniFamStream) "okhttp/4.12.0" else "MovieBoxPro/16.2.1 (Android 14; com.community.mbox.in)"
+        var defaultReferer: String? = null
+        var defaultOrigin: String? = null
 
-    fun startHlsDownload(
-        context: android.content.Context,
-        subject: MovieSubject,
-        safeTitle: String,
-        m3u8Url: String,
-        cookies: String = "",
-        subtitles: List<com.example.data.model.SubtitleItem> = emptyList()
-    ) {
-        val downloadId = System.currentTimeMillis()
-        val safeShowName = subject.name.trim().replace(Regex("[^a-zA-Z0-9.-]"), "_")
-        val cleanTitle = safeTitle.replace(Regex("[^a-zA-Z0-9.-]"), "_")
-
-        val baseCineVaultDir = getDownloadStorageDir(context)
-        val showDir = java.io.File(baseCineVaultDir, safeShowName)
-        if (!showDir.exists()) showDir.mkdirs()
-
-        val epDir = java.io.File(showDir, cleanTitle)
-        if (!epDir.exists()) epDir.mkdirs()
-
-        val targetFile = java.io.File(epDir, "$cleanTitle.mp4")
-        val partFile = java.io.File(epDir, "$cleanTitle.mp4.part")
-
-        // 1. Download Show Poster ONCE into showDir/poster.jpg (never duplicate per episode)
-        downloadShowPosterOnce(safeShowName, subject.poster, showDir)
-
-        // 2. Download all subtitles for this episode into epDir
-        downloadAllSubtitles(epDir, cleanTitle, subtitles)
-
-        val job = viewModelScope.launch(Dispatchers.IO) {
-            val currentJob = coroutineContext[kotlinx.coroutines.Job]
-            val client = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                .followRedirects(true)
-                .followSslRedirects(true)
-                .build()
-
-            val isAniFamStream = isAniFam ||
-                    m3u8Url.contains("zokoanime", ignoreCase = true) ||
-                    m3u8Url.contains("dramahot", ignoreCase = true) ||
-                    m3u8Url.contains("anifam", ignoreCase = true) ||
-                    m3u8Url.contains("shiora", ignoreCase = true) ||
-                    m3u8Url.contains("embermeadow", ignoreCase = true) ||
-                    m3u8Url.contains("megaplay", ignoreCase = true) ||
-                    m3u8Url.contains("laggedduringcutscene", ignoreCase = true) ||
-                    m3u8Url.contains("anipixcdn", ignoreCase = true)
-
-            var defaultUserAgent = if (isAniFamStream) "okhttp/4.12.0" else "MovieBoxPro/16.2.1 (Android 14; com.community.mbox.in)"
-            var defaultReferer: String? = null
-            var defaultOrigin: String? = null
-
-            if (isAniFamStream) {
-                when {
-                    m3u8Url.contains("shiora", ignoreCase = true) ||
-                    m3u8Url.contains("embermeadow", ignoreCase = true) ||
-                    m3u8Url.contains("megaplay", ignoreCase = true) ||
-                    m3u8Url.contains("laggedduringcutscene", ignoreCase = true) -> {
-                        defaultReferer = "https://megaplay.buzz/"
-                        defaultOrigin = "https://megaplay.buzz"
-                        defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                    }
-                    m3u8Url.contains("anipixcdn", ignoreCase = true) -> {
-                        defaultUserAgent = "okhttp/4.12.0"
-                    }
-                    else -> {
-                        defaultReferer = "https://zokoanime.video/"
-                        defaultOrigin = "https://zokoanime.video"
-                        defaultUserAgent = "okhttp/4.12.0"
-                    }
+        if (isAniFamStream) {
+            when {
+                streamUrl.contains("shiora", ignoreCase = true) ||
+                streamUrl.contains("embermeadow", ignoreCase = true) ||
+                streamUrl.contains("megaplay", ignoreCase = true) ||
+                streamUrl.contains("laggedduringcutscene", ignoreCase = true) -> {
+                    defaultReferer = "https://megaplay.buzz/"
+                    defaultOrigin = "https://megaplay.buzz"
+                    defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
                 }
-            }
-
-            val actualCookies = mutableListOf<String>()
-            var customUserAgent: String? = null
-            var customReferer: String? = null
-            var customOrigin: String? = null
-
-            if (cookies.isNotBlank()) {
-                cookies.split(";").forEach { rawPair ->
-                    val pair = rawPair.trim()
-                    if (pair.contains("=")) {
-                        val parts = pair.split("=", limit = 2)
-                        val k = parts[0].trim()
-                        val v = parts[1].trim()
-                        when {
-                            k.equals("User-Agent", ignoreCase = true) -> customUserAgent = v
-                            k.equals("Referer", ignoreCase = true) -> customReferer = v
-                            k.equals("Origin", ignoreCase = true) -> customOrigin = v
-                            else -> actualCookies.add("$k=$v")
-                        }
-                    } else if (pair.isNotEmpty()) {
-                        actualCookies.add(pair)
-                    }
+                streamUrl.contains("anipixcdn", ignoreCase = true) -> {
+                    defaultUserAgent = "okhttp/4.12.0"
                 }
-            }
-
-            val finalUserAgent = customUserAgent ?: defaultUserAgent
-            val finalReferer = customReferer ?: defaultReferer
-            val finalOrigin = customOrigin ?: defaultOrigin
-
-            val headersBuilder = okhttp3.Headers.Builder()
-                .add("User-Agent", finalUserAgent)
-            if (!finalReferer.isNullOrBlank()) {
-                headersBuilder.add("Referer", finalReferer)
-            }
-            if (!finalOrigin.isNullOrBlank()) {
-                headersBuilder.add("Origin", finalOrigin)
-            }
-            if (actualCookies.isNotEmpty()) {
-                headersBuilder.add("Cookie", actualCookies.joinToString("; "))
-            }
-            val headers = headersBuilder.build()
-
-            try {
-                val activeItem = ActiveDownload(
-                    id = downloadId,
-                    title = safeTitle,
-                    progress = 0,
-                    downloadedBytes = 0L,
-                    totalBytes = 80_000_000L,
-                    status = android.app.DownloadManager.STATUS_RUNNING,
-                    reason = 0,
-                    url = m3u8Url,
-                    posterUrl = subject.poster
-                )
-                withContext(Dispatchers.Main) {
-                    inAppDownloads = inAppDownloads + activeItem
+                else -> {
+                    defaultReferer = "https://zokoanime.video/"
+                    defaultOrigin = "https://zokoanime.video"
+                    defaultUserAgent = "okhttp/4.12.0"
                 }
-
-                // 1. Fetch playlist
-                val m3u8Req = okhttp3.Request.Builder().url(m3u8Url).headers(headers).build()
-                val (m3u8Content, effectivePlaylistUrl) = client.newCall(m3u8Req).execute().use { resp ->
-                    if (!resp.isSuccessful) throw Exception("HTTP ${resp.code} fetching playlist")
-                    Pair(resp.body?.string() ?: throw Exception("Empty playlist"), resp.request.url.toString())
-                }
-
-                var mediaUrl = effectivePlaylistUrl
-                var mediaContent = m3u8Content
-                if (m3u8Content.contains("#EXT-X-STREAM-INF")) {
-                    val lines = m3u8Content.lines()
-                    val variantUri = lines.firstOrNull { it.trim().isNotEmpty() && !it.startsWith("#") }
-                    if (variantUri != null) {
-                        val trimmed = variantUri.trim()
-                        mediaUrl = try {
-                            java.net.URI(effectivePlaylistUrl).resolve(trimmed).toString()
-                        } catch (_: Exception) {
-                            if (trimmed.startsWith("http")) trimmed else effectivePlaylistUrl.substringBeforeLast('/') + "/" + trimmed
-                        }
-                        val mediaReq = okhttp3.Request.Builder().url(mediaUrl).headers(headers).build()
-                        mediaContent = client.newCall(mediaReq).execute().use { resp ->
-                            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code} fetching variant playlist")
-                            resp.body?.string() ?: throw Exception("Empty media playlist")
-                        }
-                    }
-                }
-
-                val segments = mediaContent.lines()
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() && !it.startsWith("#") }
-                    .map { uri ->
-                        val trimmed = uri.trim()
-                        val resolved = try {
-                            java.net.URI(mediaUrl).resolve(trimmed).toString()
-                        } catch (_: Exception) {
-                            if (trimmed.startsWith("http")) trimmed else mediaUrl.substringBeforeLast('/') + "/" + trimmed
-                        }
-                        val baseQuery = mediaUrl.substringAfter('?', "")
-                        if (baseQuery.isNotEmpty() && !trimmed.startsWith("http://") && !trimmed.startsWith("https://") && !resolved.contains("?")) {
-                            "$resolved?$baseQuery"
-                        } else {
-                            resolved
-                        }
-                    }
-
-                if (segments.isEmpty()) {
-                    throw Exception("No video segments found in stream")
-                }
-
-                val totalSegments = segments.size
-                if (partFile.exists()) partFile.delete()
-                partFile.createNewFile()
-
-                val outputStream = java.io.FileOutputStream(partFile, true)
-                outputStream.use { out ->
-                    var downloadedBytes = 0L
-                    for ((index, segUrl) in segments.withIndex()) {
-                        if (currentJob?.isActive != true) break
-
-                        var segBytes: ByteArray? = null
-                        var attempts = 0
-                        while (attempts < 3 && segBytes == null && currentJob?.isActive == true) {
-                            attempts++
-                            try {
-                                val segReq = okhttp3.Request.Builder().url(segUrl).headers(headers).build()
-                                client.newCall(segReq).execute().use { resp ->
-                                    if (resp.isSuccessful) {
-                                        segBytes = resp.body?.bytes()
-                                    } else {
-                                        android.util.Log.w("MovieViewModel", "Segment $index failed: HTTP ${resp.code}")
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                android.util.Log.w("MovieViewModel", "Segment $index attempt $attempts error: ${e.message}")
-                                kotlinx.coroutines.delay(1000)
-                            }
-                        }
-
-                        if (segBytes != null) {
-                            out.write(segBytes)
-                            downloadedBytes += segBytes!!.size
-                        }
-
-                        val progressPercent = (((index + 1) * 100) / totalSegments).coerceIn(0, 99)
-                        val estTotal = if (index > 0) (downloadedBytes / (index + 1)) * totalSegments else downloadedBytes * totalSegments
-
-                        withContext(Dispatchers.Main) {
-                            inAppDownloads = inAppDownloads.map {
-                                if (it.id == downloadId) it.copy(
-                                    progress = progressPercent,
-                                    downloadedBytes = downloadedBytes,
-                                    totalBytes = estTotal
-                                ) else it
-                            }
-                        }
-                    }
-                }
-
-                if (currentJob?.isActive == true && partFile.exists() && partFile.length() > 0) {
-                    if (targetFile.exists()) targetFile.delete()
-                    partFile.renameTo(targetFile)
-                    withContext(Dispatchers.Main) {
-                        inAppDownloads = inAppDownloads.filter { it.id != downloadId }
-                        scanDownloadedFiles()
-                        safeToast(context, "Download complete: $safeTitle")
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("MovieViewModel", "HLS download failed for $safeTitle", e)
-                if (partFile.exists()) partFile.delete()
-                withContext(Dispatchers.Main) {
-                    inAppDownloads = inAppDownloads.filter { it.id != downloadId }
-                    safeToast(context, "Download failed: ${e.message}")
-                }
-            } finally {
-                inAppDownloadJobs.remove(downloadId)
             }
         }
-        inAppDownloadJobs[downloadId] = job
-    }
 
-    fun cancelInAppDownload(id: Long) {
-        inAppDownloadJobs[id]?.cancel()
-        inAppDownloadJobs.remove(id)
-        inAppDownloads = inAppDownloads.filter { it.id != id }
+        val actualCookies = mutableListOf<String>()
+        var customUserAgent: String? = null
+        var customReferer: String? = null
+        var customOrigin: String? = null
+
+        if (cookies.isNotBlank()) {
+            cookies.split(";").forEach { rawPair ->
+                val pair = rawPair.trim()
+                if (pair.contains("=")) {
+                    val parts = pair.split("=", limit = 2)
+                    val k = parts[0].trim()
+                    val v = parts[1].trim()
+                    when {
+                        k.equals("User-Agent", ignoreCase = true) -> customUserAgent = v
+                        k.equals("Referer", ignoreCase = true) -> customReferer = v
+                        k.equals("Origin", ignoreCase = true) -> customOrigin = v
+                        else -> actualCookies.add("$k=$v")
+                    }
+                } else if (pair.isNotEmpty()) {
+                    actualCookies.add(pair)
+                }
+            }
+        }
+
+        val finalUserAgent = customUserAgent ?: defaultUserAgent
+        val finalReferer = customReferer ?: defaultReferer
+        val finalOrigin = customOrigin ?: defaultOrigin
+
+        val headersBuilder = okhttp3.Headers.Builder()
+            .add("User-Agent", finalUserAgent)
+        if (!finalReferer.isNullOrBlank()) {
+            headersBuilder.add("Referer", finalReferer)
+        }
+        if (!finalOrigin.isNullOrBlank()) {
+            headersBuilder.add("Origin", finalOrigin)
+        }
+        if (actualCookies.isNotEmpty()) {
+            headersBuilder.add("Cookie", actualCookies.joinToString("; "))
+        }
+        return headersBuilder.build().toMultimap().mapValues { it.value.joinToString("; ") }
     }
 
     fun downloadEpisodesBatch(
@@ -2455,7 +2388,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     if (streamUrl.isNotEmpty() && !streamUrl.contains("b164fbfb4347792950bdfbfb563d39d9.mp4")) {
                         val safeTitle = "${subject.name} S${ep.seasonNumber}E${ep.episodeNumber.toString().padStart(2, '0')}"
                         val cookies = stream?.cookie ?: ""
-                        startDownload(context, subject, safeTitle, streamUrl, cookies, playInfoResult.subTitleList)
+                        startDownload(context, subject, safeTitle, streamUrl, cookies, playInfoResult.subTitleList, stream?.quality ?: defaultDownloadQuality, ep)
                         queuedCount++
                         withContext(Dispatchers.Main) {
                             onProgressUpdate?.invoke(queuedCount, episodes.size)
@@ -2468,77 +2401,19 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun selectMovieDirect() {
-        val subject = selectedSubject ?: return
-        if (subject.id.startsWith("tmdb_") && !isAniFam) {
-            isPlaybackLoading = true
-            viewModelScope.launch {
-                try {
-                    val searchResults = repository.search(subject.name)
-                    val matched = searchResults.firstOrNull { 
-                        it.name.equals(subject.name, ignoreCase = true)
-                    } ?: searchResults.firstOrNull {
-                        it.name.contains(subject.name, ignoreCase = true) || subject.name.contains(it.name, ignoreCase = true)
-                    } ?: searchResults.firstOrNull()
-
-                    if (matched != null) {
-                        val fullDetail = repository.getDetail(matched.id)
-                        if (fullDetail != null) {
-                            setupSubjectWithDetail(fullDetail)
-                            selectedSubject = fullDetail
-                            selectMovieDirect()
-                            return@launch
-                        }
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("MovieViewModel", "Failed to resolve tmdb for direct play", e)
-                } finally {
-                    isPlaybackLoading = false
-                }
-            }
-            return
-        }
-        isPlaybackLoading = true
-        viewModelScope.launch {
-            try {
-                val resolvedPlayInfo = repository.getPlayInfo(
-                    subject.id,
-                    0,
-                    0,
-                    resourceId = selectedResource?.resourceId
-                )
-                // Fetch history before setting playInfo to prevent race condition with ExoPlayer
-                val existingProgress = repository.getHistoryById(subject.id)
-                if (existingProgress != null) {
-                    playbackProgressMs = existingProgress.seeTime
-                    mediaDurationMs = existingProgress.totalTime
-                } else {
-                    playbackProgressMs = 0L
-                    mediaDurationMs = 0L
-                }
-
-                selectedStream = selectStreamByPreference(resolvedPlayInfo.streamList, defaultStreamQuality)
-                val isDubSelected = selectedResource?.name?.contains("dub", ignoreCase = true) == true
-                selectedSubtitle = if (isDubSelected) null else (resolvedPlayInfo.subTitleList.find { it.language.contains("eng", ignoreCase = true) } ?: resolvedPlayInfo.subTitleList.firstOrNull())
-                isPlaying = true
-                playInfo = resolvedPlayInfo
-            } catch (e: Exception) {
-                android.util.Log.e("MovieViewModel", "Failed to fetch movie play info", e)
-            } finally {
-                isPlaybackLoading = false
-            }
-        }
-    }
-
     fun selectLanguageResource(resource: com.example.data.model.ResourceDetector) {
+        cancelPlaybackRequest()
+        selectedSubtitle = null
+        playInfo = null
         selectedResource = resource
         val originalSubject = originalSubjectDetail ?: selectedSubject ?: return
         isPlaybackLoading = true
-        viewModelScope.launch {
+        playbackJob = viewModelScope.launch {
             try {
                 if (!isAniFam && resource.resourceId.startsWith("dub_")) {
                     val dubSubjectId = resource.resourceId.substringAfter("dub_")
                     val dubDetail = repository.getDetail(dubSubjectId)
+                    ensureActive()
                     if (dubDetail != null) {
                         selectedSubject = dubDetail
                         val rawSeasons = if (dubDetail.isTvShow) dubDetail.seasonList.filter { it.episodeList.isNotEmpty() }.map { it.season }.sorted() else emptyList()
@@ -2558,24 +2433,12 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     episodesList = repository.getEpisodes(originalSubject.id, selectedSeason)
                 }
 
-                val activeSubjectId = selectedSubject?.id ?: originalSubject.id
-                val epNum = currentEpisode?.episodeNumber ?: 1
-                val seNum = currentEpisode?.seasonNumber ?: 1
-
-                val resolvedPlayInfo = if (originalSubject.isTvShow) {
-                    repository.getPlayInfo(activeSubjectId, seNum, epNum, resourceId = resource.resourceId)
-                } else {
-                    repository.getPlayInfo(activeSubjectId, 0, 0, resourceId = resource.resourceId)
-                }
-                playInfo = resolvedPlayInfo
-                selectedStream = selectStreamByPreference(resolvedPlayInfo.streamList, defaultStreamQuality)
-                val isDubSelected = selectedResource?.name?.contains("dub", ignoreCase = true) == true
-                selectedSubtitle = if (isDubSelected) null else (resolvedPlayInfo.subTitleList.find { it.language.contains("eng", ignoreCase = true) } ?: resolvedPlayInfo.subTitleList.firstOrNull())
-                isPlaying = true
+                ensureActive()
+                resolvePlayback(currentEpisode, false)
             } catch (e: Exception) {
                 android.util.Log.e("MovieViewModel", "Failed to change resource", e)
             } finally {
-                isPlaybackLoading = false
+                if (isActive) isPlaybackLoading = false
             }
         }
     }
@@ -2745,53 +2608,35 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Save playback position tick
-    fun updatePlaybackProgress(positionMs: Long, durationMs: Long) {
-        playbackProgressMs = positionMs
-        mediaDurationMs = durationMs
-        
-        // Never save or sync watch history when in a W2G watch party session
-        if (activeW2GRoom != null) return
-
-        val subject = selectedSubject ?: return
-        val cleanSubjectId = subject.id.removePrefix("anifam_").removePrefix("moviebox_")
-        if (isAniFam) {
-            prefs.removeDeletedAniFamAnimeId(cleanSubjectId)
+    private var lastSaved: Pair<String, Long>? = null
+    fun updatePlaybackProgress(entry: HistoryEntity, positionMs: Long, durationMs: Long, force: Boolean = false) {
+        if (activeW2GRoom != null || durationMs <= 0 || positionMs < 0) return
+        if (entry.id == playbackEntry?.id) {
+            playbackProgressMs = positionMs
+            mediaDurationMs = durationMs
         }
-        val prefix = if (isAniFam) "anifam" else "moviebox"
-        val id = if (subject.isTvShow) {
-            val ep = currentEpisode ?: return
-            "${prefix}_${cleanSubjectId}_S${ep.seasonNumber}_E${ep.episodeNumber}"
-        } else {
-            "${prefix}_${cleanSubjectId}"
-        }
-
+        val last = lastSaved
+        if (last?.first == entry.id && (last.second == positionMs || (!force && kotlin.math.abs(positionMs - last.second) < 10_000))) return
+        lastSaved = entry.id to positionMs
+        val record = entry.copy(seeTime = positionMs, totalTime = durationMs, timestamp = System.currentTimeMillis())
+        val cleanSubjectId = entry.subjectId.removePrefix("anifam_")
+        val ani = entry.id.startsWith("anifam_")
+        val dub = selectedResource?.name?.contains("dub", true) == true
+        if (ani) prefs.removeDeletedAniFamAnimeId(cleanSubjectId)
         viewModelScope.launch {
-            repository.insertHistory(
-                HistoryEntity(
-                    id = id,
-                    subjectId = if (isAniFam) "anifam_$cleanSubjectId" else subject.id,
-                    name = subject.name,
-                    poster = subject.poster,
-                    isTvShow = subject.isTvShow,
-                    season = if (subject.isTvShow) currentEpisode?.seasonNumber ?: 1 else 0,
-                    episode = if (subject.isTvShow) currentEpisode?.episodeNumber ?: 1 else 0,
-                    seeTime = positionMs,
-                    totalTime = durationMs
-                )
-            )
+            repository.insertHistory(record)
 
             // Online AniFam progress sync
-            if (isAniFam && isLoggedIn) {
-                val epNum = currentEpisode?.episodeNumber ?: 1
-                val numId = subject.id.removePrefix("anifam_").toIntOrNull()
+            if (ani && isLoggedIn) {
+                val epNum = entry.episode
+                val numId = cleanSubjectId.toIntOrNull()
                 if (numId != null) {
                     val posSec = (positionMs / 1000).toInt()
                     val durSec = (durationMs / 1000).toInt()
-                    if (posSec > 0 && durSec > 0 && (posSec % 10 == 0 || posSec == 5)) {
+                    if (posSec > 0 && durSec > 0 && (posSec % 10 == 0 || force)) {
                         val epId = repository.getAniFamEpisodeId(numId, epNum)
-                            ?: currentEpisode?.episodeId?.removePrefix("anifam_${numId}_")?.toIntOrNull()
                         if (epId != null) {
-                            val track = if (selectedResource?.name?.contains("dub", ignoreCase = true) == true) "dub" else "sub"
+                            val track = if (dub) "dub" else "sub"
                             repository.syncAniFamWatchProgress(epId, posSec, durSec, track)
                         }
                     }
@@ -2858,7 +2703,13 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                         continue
                     }
                     val epNum = item.epNumber
-                    val historyId = "anifam_${anime.id}_S1_E${epNum}"
+                    val historyId = historyKey(true, animeIdStr, 1, epNum)
+                    val saved = repository.getHistoryById(historyId)
+                    val updated = item.updated_at?.let { raw ->
+                        runCatching { java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", java.util.Locale.US).parse(raw)?.time }.getOrNull()
+                            ?: runCatching { java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US).parse(raw)?.time }.getOrNull()
+                    }
+                    if (saved != null && (updated == null || saved.timestamp >= updated)) continue
                     repository.insertHistory(
                         HistoryEntity(
                             id = historyId,
@@ -2869,6 +2720,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                             season = 1,
                             episode = epNum,
                             seeTime = (item.position ?: 0) * 1000L,
+                            timestamp = updated ?: 0L,
                             totalTime = (item.duration ?: 0) * 1000L
                         )
                     )

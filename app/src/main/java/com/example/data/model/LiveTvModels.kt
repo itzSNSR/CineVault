@@ -20,6 +20,7 @@ data class UnifiedChannel(
     val directKeyId: String? = null,
     val directKey: String? = null,
     val directCookie: String? = null,
+    val favoriteId: String? = null,
     val isDirectWorker: Boolean = false
 )
 

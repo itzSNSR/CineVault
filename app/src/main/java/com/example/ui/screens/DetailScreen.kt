@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import com.example.data.local.resumePosition
+import com.example.ui.theme.glass
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
@@ -74,14 +76,21 @@ import com.example.R
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.rotate
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun DetailScreen(viewModel: MovieViewModel) {
     val subject = viewModel.selectedSubject ?: return
+    val allHistory by viewModel.historyList.collectAsState()
+    val history = allHistory.filter { it.subjectId.removePrefix("moviebox_").removePrefix("anifam_") == subject.id.removePrefix("moviebox_").removePrefix("anifam_") }
+    val last = history.firstOrNull()
+    val resume = last?.takeIf { it.resumePosition > 0 }
+    var expanded by remember(subject.id) { mutableStateOf(false) }
+    var overflows by remember(subject.id) { mutableStateOf(false) }
+    val context = LocalContext.current
     val isFav by viewModel.isFavoriteFlow(subject.id).collectAsState(false)
 
     BackHandler {
-        viewModel.selectedSubject = null
+        viewModel.closeDetail()
     }
 
     Box(
@@ -139,7 +148,7 @@ fun DetailScreen(viewModel: MovieViewModel) {
 
                     // Close Button
                     IconButton(
-                        onClick = { viewModel.selectedSubject = null },
+                        onClick = { viewModel.closeDetail() },
                         modifier = Modifier
                             .statusBarsPadding()
                             .padding(top = 16.dp, start = 16.dp)
@@ -167,14 +176,6 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             color = TextPrimary,
                             modifier = Modifier.weight(1f)
                         )
-                        IconButton(onClick = { viewModel.toggleFavorite(subject) }) {
-                            Icon(
-                                imageVector = if (isFav) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
-                                contentDescription = "Favorite",
-                                tint = if (isFav) CinematicRed else TextPrimary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -200,9 +201,34 @@ fun DetailScreen(viewModel: MovieViewModel) {
 
                     Spacer(modifier = Modifier.height(12.dp))
 
+                    val episode = viewModel.episodesList.firstOrNull()
+                    Button(onClick = {
+                        if (resume != null) viewModel.resumeHistory(resume)
+                        else if (episode != null && subject.isTvShow) viewModel.selectEpisode(episode)
+                        else viewModel.selectMovieDirect()
+                    }, modifier = Modifier.fillMaxWidth().testTag("play_movie_button")) {
+                        Icon(Icons.Filled.PlayArrow, null)
+                        Text(if (resume != null) "Resume · ${formatTime(resume.seeTime)}" else "Play")
+                    }
+                    if (last?.isTvShow == true) Text("Last watched · S${last.season} E${last.episode}", color = TextSecondary)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        IconButton(onClick = { viewModel.toggleFavorite(subject) }) {
+                            Icon(
+                                imageVector = if (isFav) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                                contentDescription = if (isFav) "Remove from watchlist" else "Add to watchlist",
+                                tint = if (isFav) CinematicRed else TextPrimary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        if (resume != null) TextButton(onClick = { viewModel.resumeHistory(resume, true) }) { Text("Start over") }
+                        TextButton(onClick = {
+                            if (subject.isTvShow && episode != null) viewModel.downloadSingleEpisode(context, subject, episode)
+                            else viewModel.downloadMovie(context, subject)
+                        }, enabled = !subject.isTvShow || episode != null) { Text(if (subject.isTvShow) "Download E${episode?.episodeNumber ?: 1}" else "Download") }
+                    }
                     // Genres row
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        subject.genres.forEach { gen ->
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(subject.genres) { gen ->
                             Card(
                                 colors = CardDefaults.cardColors(containerColor = ObsidianCard),
                                 shape = RoundedCornerShape(4.dp)
@@ -243,9 +269,147 @@ fun DetailScreen(viewModel: MovieViewModel) {
                         text = subject.description.ifEmpty { "No description available for this item." },
                         fontSize = 14.sp,
                         color = TextSecondary,
-                        lineHeight = 20.sp
+                        lineHeight = 20.sp,
+                        maxLines = if (expanded) Int.MAX_VALUE else 3,
+                        overflow = TextOverflow.Ellipsis,
+                        onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow }
                     )
+                    if (overflows || expanded) TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Show less" else "Read more") }
 
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    if (subject.isTvShow && !viewModel.isAniFam) {
+                        Text(
+                            text = "Seasons",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+
+                        // Season Selector Horizontal chips
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(bottom = 20.dp)
+                        ) {
+                            items(viewModel.seasonsList) { s ->
+                                FilterChip(
+                                    selected = viewModel.selectedSeason == s,
+                                    onClick = { viewModel.loadEpisodesForSeason(s) },
+                                    label = { Text("Season $s") },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = CinematicRed,
+                                        selectedLabelColor = Color.White,
+                                        containerColor = ObsidianCard,
+                                        labelColor = TextSecondary
+                                    ),
+                                    border = null
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // TV Show Episodes List Section
+            if (subject.isTvShow) {
+                if (viewModel.isLoadingEpisodes) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 36.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(28.dp),
+                                    color = CinematicRed,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    text = "Loading episodes...",
+                                    color = TextSecondary,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+                } else if (viewModel.episodesList.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 36.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No episodes available for this season",
+                                color = TextSecondary,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                } else {
+                    items(viewModel.episodesList) { ep ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 6.dp)
+                                .clickable { viewModel.selectEpisode(ep) }
+                                .glass(14.dp)
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AsyncImage(
+                                model = ep.stillPath.ifEmpty { subject.poster },
+                                contentDescription = ep.title,
+                                contentScale = ContentScale.Crop, placeholder = androidx.compose.ui.graphics.painter.ColorPainter(androidx.compose.ui.graphics.Color.DarkGray), error = androidx.compose.ui.graphics.painter.ColorPainter(androidx.compose.ui.graphics.Color.DarkGray),
+                                modifier = Modifier
+                                    .size(width = 80.dp, height = 50.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Episode ${ep.episodeNumber}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AccentAmber
+                                )
+                                history.firstOrNull { it.episode == ep.episodeNumber && it.season == ep.seasonNumber }?.let {
+                                    LinearProgressIndicator(progress = { (it.seeTime.toFloat() / it.totalTime.coerceAtLeast(1)).coerceIn(0f, 1f) })
+                                }
+                                Text(
+                                    text = ep.title,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            val context = LocalContext.current
+                            IconButton(
+                                onClick = { viewModel.downloadSingleEpisode(context, subject, ep) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Download,
+                                    contentDescription = "Download Episode",
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(Icons.Filled.PlayCircleFilled, contentDescription = "Play", tint = CinematicRed, modifier = Modifier.size(32.dp))
+                        }
+                    }
+                }
+            }
+
+            item { Column(Modifier.padding(horizontal = 20.dp)) {
                     // Live Cast / Characters Section
                     if (subject.cast.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(16.dp))
@@ -338,151 +502,7 @@ fun DetailScreen(viewModel: MovieViewModel) {
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // Action buttons
-                    if (!subject.isTvShow) {
-                        Button(
-                            onClick = { viewModel.selectMovieDirect() },
-                            colors = ButtonDefaults.buttonColors(containerColor = CinematicRed),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                                .testTag("play_movie_button"),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = "Play")
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Stream Movie in High Definition", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        }
-                    } else if (!viewModel.isAniFam) {
-                        Text(
-                            text = "Seasons",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextPrimary,
-                            modifier = Modifier.padding(bottom = 12.dp)
-                        )
-
-                        // Season Selector Horizontal chips
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.padding(bottom = 20.dp)
-                        ) {
-                            items(viewModel.seasonsList) { s ->
-                                FilterChip(
-                                    selected = viewModel.selectedSeason == s,
-                                    onClick = { viewModel.loadEpisodesForSeason(s) },
-                                    label = { Text("Season $s") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = CinematicRed,
-                                        selectedLabelColor = Color.White,
-                                        containerColor = ObsidianCard,
-                                        labelColor = TextSecondary
-                                    ),
-                                    border = null
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // TV Show Episodes List Section
-            if (subject.isTvShow) {
-                if (viewModel.isLoadingEpisodes) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 36.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(28.dp),
-                                    color = CinematicRed,
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Text(
-                                    text = "Loading episodes...",
-                                    color = TextSecondary,
-                                    fontSize = 13.sp
-                                )
-                            }
-                        }
-                    }
-                } else if (viewModel.episodesList.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 36.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "No episodes available for this season",
-                                color = TextSecondary,
-                                fontSize = 14.sp
-                            )
-                        }
-                    }
-                } else {
-                    items(viewModel.episodesList) { ep ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 6.dp)
-                                .clickable { viewModel.selectEpisode(ep) }
-                                .background(ObsidianCard, RoundedCornerShape(8.dp))
-                                .padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            AsyncImage(
-                                model = ep.stillPath.ifEmpty { subject.poster },
-                                contentDescription = ep.title,
-                                contentScale = ContentScale.Crop, placeholder = androidx.compose.ui.graphics.painter.ColorPainter(androidx.compose.ui.graphics.Color.DarkGray), error = androidx.compose.ui.graphics.painter.ColorPainter(androidx.compose.ui.graphics.Color.DarkGray),
-                                modifier = Modifier
-                                    .size(width = 80.dp, height = 50.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                            )
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Episode ${ep.episodeNumber}",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = AccentAmber
-                                )
-                                Text(
-                                    text = ep.title,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = TextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            val context = LocalContext.current
-                            IconButton(
-                                onClick = { viewModel.downloadSingleEpisode(context, subject, ep) },
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    Icons.Filled.Download,
-                                    contentDescription = "Download Episode",
-                                    tint = Color.White.copy(alpha = 0.85f),
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(Icons.Filled.PlayCircleFilled, contentDescription = "Play", tint = CinematicRed, modifier = Modifier.size(32.dp))
-                        }
-                    }
-                }
-            }
-
+            } }
             // Bottom space
             item {
                 Spacer(modifier = Modifier.height(40.dp))

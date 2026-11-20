@@ -59,6 +59,7 @@ import com.example.data.model.StreamItem
 import com.example.data.model.SubtitleItem
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MovieViewModel
+import com.example.data.download.DownloadQueue
 import com.example.ui.viewmodel.ActiveDownload
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
@@ -98,162 +99,6 @@ object PosterDownloadTracker {
 
     fun markFailed(showPrefix: String) {
         downloadingOrDownloadedShows.remove(showPrefix)
-    }
-}
-
-fun downloadVideo(
-    context: android.content.Context,
-    url: String,
-    title: String,
-    posterUrl: String = "",
-    showToast: Boolean = true,
-    safeShowPrefixOverride: String? = null,
-    subtitles: List<com.example.data.model.SubtitleItem> = emptyList()
-) {
-    val postToast: (String) -> Unit = { msg ->
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            try {
-                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
-            } catch (_: Throwable) {}
-        }
-    }
-
-    if (url.isEmpty()) {
-        if (showToast) postToast("Stream URL is empty")
-        return
-    }
-    try {
-        val safeTitle = title.replace(Regex("[^a-zA-Z0-9.-]"), "_")
-        val manager = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-
-        val safeShowName = safeShowPrefixOverride?.ifBlank { null }
-            ?: Regex("(?i)(.*?)(?:[\\s._-]*S\\d+E\\d+.*|$)").find(title)?.groupValues?.get(1)?.trim()?.ifEmpty { null }
-            ?: Regex("(.*?)(_S\\d+E\\d+.*|$)").find(safeTitle)?.groupValues?.get(1)?.replace("_", " ")?.trim()
-            ?: safeTitle
-        val safeShowPrefix = safeShowName.replace(Regex("[^a-zA-Z0-9.-]"), "_")
-
-        val moviesDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MOVIES)
-        val cineVaultDir = java.io.File(moviesDir, "CineVault")
-        val showDir = java.io.File(cineVaultDir, safeShowPrefix)
-        if (!showDir.exists()) showDir.mkdirs()
-        val epDir = java.io.File(showDir, safeTitle)
-        if (!epDir.exists()) epDir.mkdirs()
-
-        // 1. Download show poster ONLY ONCE into showDir/poster.jpg
-        if (posterUrl.isNotEmpty()) {
-            val showPoster = java.io.File(showDir, "poster.jpg")
-            val namedPoster = java.io.File(showDir, "$safeShowPrefix.jpg")
-            if (!showPoster.exists() && PosterDownloadTracker.shouldDownload(safeShowPrefix)) {
-                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                    try {
-                        val referer = when {
-                            posterUrl.contains("anifam", ignoreCase = true) -> "https://anifam.net/"
-                            posterUrl.contains("tmdb.org", ignoreCase = true) -> "https://www.themoviedb.org/"
-                            else -> "https://moviebox.ph/"
-                        }
-                        val client = okhttp3.OkHttpClient.Builder()
-                            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-                            .followRedirects(true)
-                            .build()
-                        val req = okhttp3.Request.Builder()
-                            .url(posterUrl)
-                            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-                            .header("Referer", referer)
-                            .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-                            .build()
-                        client.newCall(req).execute().use { resp ->
-                            if (resp.isSuccessful) {
-                                val bytes = resp.body?.bytes()
-                                if (bytes != null && bytes.isNotEmpty()) {
-                                    if (!showPoster.exists()) showPoster.writeBytes(bytes)
-                                    try { if (!namedPoster.exists()) namedPoster.writeBytes(bytes) } catch (_: Throwable) {}
-                                }
-                            } else {
-                                PosterDownloadTracker.markFailed(safeShowPrefix)
-                            }
-                        }
-                    } catch (_: Exception) {
-                        PosterDownloadTracker.markFailed(safeShowPrefix)
-                    }
-                }
-            }
-        }
-
-        // 2. Download all subtitles into epDir
-        if (subtitles.isNotEmpty()) {
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                val client = okhttp3.OkHttpClient.Builder()
-                    .connectTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-                    .followRedirects(true)
-                    .build()
-                val subArray = org.json.JSONArray()
-                val usedNames = mutableSetOf<String>()
-
-                for ((index, sub) in subtitles.withIndex()) {
-                    try {
-                        if (sub.url.isBlank()) continue
-                        val ext = if (sub.url.contains(".vtt", ignoreCase = true) || sub.format.equals("vtt", ignoreCase = true)) "vtt" else "srt"
-                        val rawLang = sub.language.trim().ifBlank { "Track ${index + 1}" }
-                        val safeLang = rawLang.replace(Regex("[/\\\\:*?\"<>|]"), " ").replace(Regex("\\s+"), " ").trim()
-                        var fileName = "$safeLang.$ext"
-                        var counter = 2
-                        while (usedNames.contains(fileName.lowercase())) {
-                            fileName = "$safeLang ($counter).$ext"
-                            counter++
-                        }
-                        usedNames.add(fileName.lowercase())
-                        val subFile = java.io.File(epDir, fileName)
-
-                        if (!subFile.exists() || subFile.length() == 0L) {
-                            val referer = if (sub.url.contains("anifam")) "https://anifam.net/" else "https://moviebox.ph/"
-                            val req = okhttp3.Request.Builder()
-                                .url(sub.url)
-                                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-                                .header("Referer", referer)
-                                .build()
-                            client.newCall(req).execute().use { resp ->
-                                if (resp.isSuccessful) {
-                                    val bytes = resp.body?.bytes()
-                                    if (bytes != null && bytes.isNotEmpty()) {
-                                        subFile.writeBytes(bytes)
-                                    }
-                                }
-                            }
-                        }
-
-                        if (subFile.exists() && subFile.length() > 0) {
-                            val item = org.json.JSONObject()
-                            item.put("language", rawLang)
-                            item.put("fileName", fileName)
-                            subArray.put(item)
-                        }
-                    } catch (_: Throwable) {}
-                }
-                if (subArray.length() > 0) {
-                    try {
-                        val jsonFile = java.io.File(epDir, "subtitles.json")
-                        jsonFile.writeText(subArray.toString())
-                    } catch (_: Exception) {}
-                }
-            }
-        }
-
-        val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
-        val fileName = "$safeTitle.mp4"
-        request.setTitle(title)
-        request.setDescription("Downloading...")
-        request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_MOVIES, "CineVault/$safeShowPrefix/$safeTitle/$fileName")
-        manager.enqueue(request)
-        if (showToast) {
-            postToast("Download started...")
-        }
-    } catch (e: Exception) {
-        if (showToast) {
-            postToast("Failed to start download: ${e.message}")
-        }
     }
 }
 
@@ -461,7 +306,7 @@ fun SplashScreen(
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF140204),
+                        ObsidianCard,
                         ObsidianDark,
                         Color(0xFF07080D)
                     )
@@ -577,7 +422,7 @@ fun LockoutScreen(viewModel: MovieViewModel) {
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF140204),
+                        ObsidianCard,
                         ObsidianDark
                     )
                 )
@@ -1230,7 +1075,7 @@ fun AppUpdateDialog(
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun MainContent(viewModel: MovieViewModel) {
-    var activeTab by remember { mutableStateOf("home") } // home, search, watchlist, history, account
+    var activeTab by rememberSaveable { mutableStateOf("home") } // home, search, watchlist, history, account
     val updateInfo = viewModel.availableUpdateInfo
     val isForceUpdateActive = updateInfo?.isForceUpdate == true
     var forceUpdateAllowDownloadsOnly by remember { mutableStateOf(false) }
@@ -1245,18 +1090,24 @@ fun MainContent(viewModel: MovieViewModel) {
     var showPrivacyWarning by rememberSaveable { mutableStateOf(!privacyWarningAlreadyShown) }
     var lastBackPressTime by remember { mutableStateOf(0L) }
 
-    // Back navigation across tabs
-    BackHandler(enabled = activeTab == "manage_categories" || activeTab == "history") {
-        activeTab = "settings"
+    var parentTab by rememberSaveable { mutableStateOf("library") }
+    var replaySequence by rememberSaveable { mutableIntStateOf(0) }
+    var replayTerm by rememberSaveable { mutableStateOf("") }
+    var ottPlatform by rememberSaveable { mutableStateOf("") }
+    val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    fun back() {
+        activeTab = when (activeTab) {
+            "manage_categories" -> "settings"
+            "history", "watchlist" -> parentTab
+            "settings", "ott_search" -> "library"
+            else -> "home"
+        }
     }
-
-    BackHandler(enabled = activeTab != "home" && activeTab != "manage_categories" && activeTab != "history") {
-        activeTab = "home"
-    }
+    BackHandler(enabled = activeTab != "home") { back() }
 
     // Cancel loading stream links on back
     BackHandler(enabled = viewModel.isPlaybackLoading) {
-        viewModel.isPlaybackLoading = false
+        viewModel.cancelPlaybackRequest()
     }
 
     // Double-tap back on home screen to exit app safely
@@ -1280,87 +1131,7 @@ fun MainContent(viewModel: MovieViewModel) {
         Scaffold(
             bottomBar = {
                 if (viewModel.playInfo == null && viewModel.playingDownloadedFile == null && !viewModel.isLiveTvPlaying) {
-                    NavigationBar(
-                        containerColor = ObsidianDark,
-                        tonalElevation = 8.dp
-                    ) {
-                        if (!isForceUpdateActive) {
-                            NavigationBarItem(
-                                selected = activeTab == "home",
-                                onClick = { activeTab = "home" },
-                                icon = { Icon(if (activeTab == "home") Icons.Filled.Home else Icons.Outlined.Home, contentDescription = "Home") },
-                                label = { Text("Home", fontSize = 11.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = CinematicRed,
-                                    selectedTextColor = CinematicRed,
-                                    indicatorColor = ObsidianCard,
-                                    unselectedIconColor = TextSecondary,
-                                    unselectedTextColor = TextSecondary
-                                ),
-                                modifier = Modifier.testTag("nav_home")
-                            )
-                            NavigationBarItem(
-                                selected = activeTab == "search",
-                                onClick = { activeTab = "search" },
-                                icon = { Icon(if (activeTab == "search") Icons.Filled.Search else Icons.Outlined.Search, contentDescription = "Search") },
-                                label = { Text("Search", fontSize = 11.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = CinematicRed,
-                                    selectedTextColor = CinematicRed,
-                                    indicatorColor = ObsidianCard,
-                                    unselectedIconColor = TextSecondary,
-                                    unselectedTextColor = TextSecondary
-                                ),
-                                modifier = Modifier.testTag("nav_search")
-                            )
-                            NavigationBarItem(
-                                selected = activeTab == "livetv",
-                                onClick = { activeTab = "livetv" },
-                                icon = { Icon(if (activeTab == "livetv") Icons.Filled.LiveTv else Icons.Outlined.LiveTv, contentDescription = "Live TV") },
-                                label = { Text("Live TV", fontSize = 11.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = CinematicRed,
-                                    selectedTextColor = CinematicRed,
-                                    indicatorColor = ObsidianCard,
-                                    unselectedIconColor = TextSecondary,
-                                    unselectedTextColor = TextSecondary
-                                ),
-                                modifier = Modifier.testTag("nav_livetv")
-                            )
-                        }
-
-                        NavigationBarItem(
-                            selected = activeTab == "download",
-                            onClick = { activeTab = "download" },
-                            icon = { Icon(if (activeTab == "download") Icons.Filled.Download else Icons.Outlined.Download, contentDescription = "Download") },
-                            label = { Text("Download", fontSize = 11.sp) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = CinematicRed,
-                                selectedTextColor = CinematicRed,
-                                indicatorColor = ObsidianCard,
-                                unselectedIconColor = TextSecondary,
-                                unselectedTextColor = TextSecondary
-                            ),
-                            modifier = Modifier.testTag("nav_download")
-                        )
-
-                        if (!isForceUpdateActive) {
-                            NavigationBarItem(
-                                selected = activeTab == "settings",
-                                onClick = { activeTab = "settings" },
-                                icon = { Icon(if (activeTab == "settings") Icons.Filled.Settings else Icons.Outlined.Settings, contentDescription = "Settings") },
-                                label = { Text("Settings", fontSize = 11.sp) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = CinematicRed,
-                                    selectedTextColor = CinematicRed,
-                                    indicatorColor = ObsidianCard,
-                                    unselectedIconColor = TextSecondary,
-                                    unselectedTextColor = TextSecondary
-                                ),
-                                modifier = Modifier.testTag("nav_settings")
-                            )
-                        }
-                    }
+                    CapsuleNavigation(activeTab, isForceUpdateActive) { replayTerm = ""; activeTab = it }
                 }
             }
         ) { innerPadding ->
@@ -1369,29 +1140,44 @@ fun MainContent(viewModel: MovieViewModel) {
                     .fillMaxSize()
                     .padding(if (viewModel.isLiveTvPlaying) PaddingValues(0.dp) else innerPadding)
             ) {
-                when (activeTab) {
-                    "home" -> HomeScreen(viewModel)
-                    "search" -> SearchScreen(viewModel)
-                    "livetv" -> LiveTvScreen(viewModel)
-                    "watchlist" -> WatchlistScreen(
-                        viewModel,
-                        onBack = { activeTab = "settings" }
-                    )
-                    "download" -> DownloadScreen(viewModel)
-                    "settings" -> SettingsScreen(
-                        viewModel, 
-                        onNavigateToHistory = { activeTab = "history" },
-                        onNavigateToWatchlist = { activeTab = "watchlist" },
-                        onNavigateToManageCategories = { activeTab = "manage_categories" }
-                    )
-                    "manage_categories" -> ManageCategoriesScreen(
-                        viewModel,
-                        onBack = { activeTab = "settings" }
-                    )
-                    "history" -> HistoryScreen(
-                        viewModel,
-                        onBack = { activeTab = "settings" }
-                    )
+                holder.SaveableStateProvider(activeTab) {
+                    when (activeTab) {
+                        "home" -> HomeScreen(viewModel)
+                        "search" -> key(replaySequence) { SearchScreen(viewModel, replayTerm) }
+                        "livetv" -> key(replaySequence) { LiveTvScreen(viewModel, replayTerm) }
+                        "ott_search" -> com.example.data.network.TmdbOttService.allPlatforms.firstOrNull { it.name == ottPlatform }?.let {
+                            OttHubScreen(it, viewModel, onBack = { back() }, initialQuery = replayTerm)
+                        }
+                        "library" -> LibraryScreen(viewModel, { parentTab = "library"; activeTab = it }) { entry ->
+                            replaySequence++
+                            replayTerm = entry.term
+                            viewModel.rememberSearch(entry.source, entry.term)
+                            when {
+                                entry.source == "Live TV" -> activeTab = "livetv"
+                                entry.source.startsWith("OTT / ") -> { ottPlatform = entry.source.removePrefix("OTT / "); activeTab = "ott_search" }
+                                else -> { viewModel.switchProvider(entry.source); activeTab = "search" }
+                            }
+                        }
+                        "watchlist" -> WatchlistScreen(
+                            viewModel,
+                            onBack = { back() }
+                        )
+                        "download" -> DownloadScreen(viewModel)
+                        "settings" -> SettingsScreen(
+                            viewModel,
+                            onNavigateToHistory = { parentTab = "settings"; activeTab = "history" },
+                            onNavigateToWatchlist = { parentTab = "settings"; activeTab = "watchlist" },
+                            onNavigateToManageCategories = { activeTab = "manage_categories" }
+                        )
+                        "manage_categories" -> ManageCategoriesScreen(
+                            viewModel,
+                            onBack = { back() }
+                        )
+                        "history" -> HistoryScreen(
+                            viewModel,
+                            onBack = { back() }
+                        )
+                    }
                 }
             }
         }
@@ -1407,13 +1193,20 @@ fun MainContent(viewModel: MovieViewModel) {
             DetailScreen(viewModel)
         }
 
-        // Simulated Video Player overlay
+        if (viewModel.playInfo != null || viewModel.isPlaybackLoading) {
+            DisposableEffect(Unit) {
+                val activity = context as? android.app.Activity
+                val previous = activity?.requestedOrientation
+                onDispose { if (previous != null) activity.requestedOrientation = previous }
+            }
+        }
+        // Video player overlay
         AnimatedVisibility(
             visible = viewModel.playInfo != null,
             enter = fadeIn(animationSpec = tween(250)),
             exit = fadeOut(animationSpec = tween(250))
         ) {
-            PlayerScreen(viewModel)
+            key(viewModel.playbackEntry?.id) { PlayerScreen(viewModel) }
         }
 
         // Offline Download Video Player overlay
@@ -1720,7 +1513,8 @@ fun MovieGridItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, GlassHighlight.copy(alpha = .18f), RoundedCornerShape(12.dp))
         ) {
             val optimalPosterUrl = androidx.compose.runtime.remember(movie.poster) {
                 com.example.util.ImageOptimizer.getOptimalUrl(movie.poster, 360)
@@ -1769,11 +1563,12 @@ fun MovieGridItem(
 }
 
 @Composable
-fun SearchScreen(viewModel: MovieViewModel) {
+fun SearchScreen(viewModel: MovieViewModel, initialQuery: String = "") {
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val results by viewModel.searchResults.collectAsState()
-    var searchInput by remember { mutableStateOf(viewModel.searchQuery) }
-    var isSearchSubmitted by remember { mutableStateOf(false) }
+    var searchInput by rememberSaveable(initialQuery, viewModel.activeProvider) { mutableStateOf(initialQuery.ifBlank { viewModel.searchQuery }) }
+    var isSearchSubmitted by rememberSaveable(initialQuery) { mutableStateOf(initialQuery.isNotBlank()) }
+    LaunchedEffect(initialQuery) { if (initialQuery.isNotBlank()) viewModel.searchMovies(initialQuery, true) }
     val searchListState = rememberLazyListState()
 
     LaunchedEffect(viewModel.customCountryIso) {
@@ -1859,11 +1654,18 @@ fun SearchScreen(viewModel: MovieViewModel) {
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
+                .glass(22.dp)
                 .testTag("search_text_input")
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        if (searchInput.isBlank()) RecentSearches(viewModel, viewModel.activeProvider) {
+            searchInput = it
+            isSearchSubmitted = true
+            viewModel.searchMovies(it, true)
+            focusManager.clearFocus()
+        }
         val suggestions by viewModel.searchSuggestions.collectAsState()
 
         if (viewModel.isSearching) {
@@ -1872,7 +1674,7 @@ fun SearchScreen(viewModel: MovieViewModel) {
             }
         } else if (!isSearchSubmitted || searchInput.isEmpty()) {
             LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(GlassSpacing),
                 modifier = Modifier.fillMaxSize()
             ) {
                 if (suggestions.isNotEmpty()) {
@@ -1897,7 +1699,7 @@ fun SearchScreen(viewModel: MovieViewModel) {
                                 viewModel.searchMovies(suggestion, immediate = true)
                                 focusManager.clearFocus()
                             }
-                            .background(ObsidianCard, RoundedCornerShape(8.dp))
+                            .glass(14.dp)
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1957,7 +1759,7 @@ fun SearchScreen(viewModel: MovieViewModel) {
                                 focusManager.clearFocus()
                                 viewModel.selectSubject(movie)
                             }
-                            .background(ObsidianCard, RoundedCornerShape(8.dp))
+                            .glass(14.dp)
                             .padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -2192,15 +1994,7 @@ fun HistoryScreen(viewModel: MovieViewModel, onBack: () -> Unit = {}) {
                                     if (item.isTvShow) {
                                         expandedSubjectId = if (isExpanded) null else groupKey
                                     } else {
-                                        // Movie: play directly
-                                        val subject = MovieSubject(
-                                            id = item.subjectId,
-                                            name = item.name,
-                                            poster = item.poster,
-                                            isTvShow = item.isTvShow
-                                        )
-                                        viewModel.selectSubject(subject)
-                                        viewModel.selectMovieDirect()
+                                        viewModel.resumeHistory(item)
                                     }
                                 },
                             verticalAlignment = Alignment.CenterVertically
@@ -2264,20 +2058,7 @@ fun HistoryScreen(viewModel: MovieViewModel, onBack: () -> Unit = {}) {
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clickable {
-                                                val subject = MovieSubject(
-                                                    id = epItem.subjectId,
-                                                    name = epItem.name,
-                                                    poster = epItem.poster,
-                                                    isTvShow = epItem.isTvShow
-                                                )
-                                                viewModel.selectSubject(subject)
-                                                val episode = Episode(
-                                                    episodeId = epItem.id,
-                                                    title = "Season ${epItem.season} Episode ${epItem.episode}",
-                                                    episodeNumber = epItem.episode,
-                                                    seasonNumber = epItem.season
-                                                )
-                                                viewModel.selectEpisode(episode)
+                                                viewModel.resumeHistory(epItem)
                                             }
                                             .padding(vertical = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically
@@ -2659,9 +2440,9 @@ fun VideoProgressBar(
     onSeekingChanged: ((Boolean, Long, Float) -> Unit)? = null,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
-    activeColor: Color = Color(0xFFE50914),
+    activeColor: Color = CinematicRed,
     inactiveColor: Color = Color.White.copy(alpha = 0.35f),
-    thumbColor: Color = Color(0xFFE50914)
+    thumbColor: Color = CinematicRed
 ) {
     val totalMs = maxOf(1L, durationMs)
     var isDragging by remember { mutableStateOf(false) }
@@ -2768,6 +2549,8 @@ fun PlayerScreen(viewModel: MovieViewModel) {
     val rawUrl = selectedStream?.url ?: ""
     val streamUrl = if (rawUrl == "https://macdn.aoneroom.com/other/2026/09/04/b164fbfb4347792950bdfbfb563d39d9.mp4") "" else rawUrl
     val selectedCookie = selectedStream?.cookie ?: ""
+    val entry = viewModel.playbackEntry ?: return
+    val inParty = remember(entry) { viewModel.activeW2GRoom != null }
     val subtitleUrl = viewModel.selectedSubtitle?.url
 
     val previewHeaders = remember(rawUrl, selectedCookie, viewModel.isAniFam) {
@@ -2984,10 +2767,25 @@ fun PlayerScreen(viewModel: MovieViewModel) {
     var seekFraction by remember { mutableStateOf(0f) }
     var lastSeekFinishedTime by remember { mutableStateOf(0L) }
 
+    fun savePosition() {
+        if (!inParty && exoPlayer.currentMediaItem?.mediaId == entry.id) {
+            viewModel.updatePlaybackProgress(entry, exoPlayer.currentPosition, exoPlayer.duration, true)
+        }
+    }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, exoPlayer, entry.id) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) savePosition()
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+
     // Sync native playlist next/prev buttons transitions with ViewModel selections & W2G Live Sync
     DisposableEffect(exoPlayer) {
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (!playWhenReady) savePosition()
                 viewModel.isPlaying = playWhenReady
                 // Live Sync: If host, broadcast play/pause state and current position
                 if (viewModel.isAniFam && viewModel.activeW2GRoom != null && viewModel.isHostingW2G) {
@@ -2997,6 +2795,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == androidx.media3.common.Player.STATE_ENDED) savePosition()
                 // Live Sync: When video is loaded and ready, set duration and sync initial position
                 if (playbackState == androidx.media3.common.Player.STATE_READY) {
                     val dur = exoPlayer.duration
@@ -3025,6 +2824,9 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                 newPosition: androidx.media3.common.Player.PositionInfo,
                 reason: Int
             ) {
+                if (reason == androidx.media3.common.Player.DISCONTINUITY_REASON_AUTO_TRANSITION && oldPosition.mediaItem?.mediaId == entry.id && durationMs > 0) {
+                    viewModel.updatePlaybackProgress(entry, durationMs, durationMs, true)
+                }
                 // Live Sync: If host manually seeks, broadcast seek position
                 if (reason == androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) {
                     if (viewModel.isAniFam && viewModel.activeW2GRoom != null && viewModel.isHostingW2G) {
@@ -3072,7 +2874,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
     }
 
     // Update stream and subtitle configuration
-    LaunchedEffect(streamUrl, subtitleUrl) {
+    LaunchedEffect(entry.id, streamUrl, selectedCookie, subtitleUrl, viewModel.subtitlesOff, viewModel.embeddedLanguage) {
         if (streamUrl.isNotEmpty()) {
             val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
                 .setUserAgent(if (viewModel.isAniFam) "okhttp/4.12.0" else "MovieBoxPro/16.2.1 (Android 14; com.community.mbox.in)")
@@ -3103,17 +2905,23 @@ fun PlayerScreen(viewModel: MovieViewModel) {
             val cacheDataSourceFactory = androidx.media3.datasource.cache.CacheDataSource.Factory()
                 .setCache(VideoCacheManager.getCache(context))
                 .setUpstreamDataSourceFactory(httpDataSourceFactory)
-                .setCacheKeyFactory { VideoCacheManager.getCacheKey(it.uri) }
+                .setCacheKeyFactory { "${entry.id}|${it.uri}" }
                 .setFlags(androidx.media3.datasource.cache.CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
-            val mediaItemBuilder = MediaItem.Builder().setUri(Uri.parse(streamUrl))
+            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .setPreferredTextLanguage(viewModel.embeddedLanguage ?: viewModel.selectedSubtitle?.language)
+                .setSelectUndeterminedTextLanguage(viewModel.embeddedLanguage == "und")
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, viewModel.subtitlesOff).build()
+            val mediaItemBuilder = MediaItem.Builder().setMediaId(entry.id).setUri(Uri.parse(streamUrl))
             if (!subtitleUrl.isNullOrEmpty()) {
-                val mimeType = if (subtitleUrl.endsWith(".vtt", ignoreCase = true)) {
+                val mimeType = if (viewModel.selectedSubtitle?.format.equals("vtt", true) || Uri.parse(subtitleUrl).path.orEmpty().endsWith(".vtt", true)) {
                     MimeTypes.TEXT_VTT
                 } else {
                     MimeTypes.APPLICATION_SUBRIP
                 }
                 val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl))
+                    .setId("cv-sub-" + entry.id)
                     .setMimeType(mimeType)
                     .setLanguage(viewModel.selectedSubtitle?.language ?: "en")
                     .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
@@ -3202,7 +3010,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
     }
 
     // Speed sync
-    var selectedSpeed by remember { mutableStateOf(1.0f) }
+    var selectedSpeed by viewModel.sessionPlaybackSpeed
     LaunchedEffect(selectedSpeed) {
         exoPlayer.setPlaybackSpeed(selectedSpeed)
     }
@@ -3275,7 +3083,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                     if (dur > 0) {
                         currentProgressMs = pos
                         durationMs = dur
-                        viewModel.updatePlaybackProgress(pos, dur)
+                        if (!inParty && exoPlayer.currentMediaItem?.mediaId == entry.id) viewModel.updatePlaybackProgress(entry, pos, dur)
                     }
                 }
                 delay(1000)
@@ -3283,12 +3091,10 @@ fun PlayerScreen(viewModel: MovieViewModel) {
         }
     }
 
-    DisposableEffect(Unit) {
-        val activity = context as? android.app.Activity
-        activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    DisposableEffect(exoPlayer) {
         onDispose {
+            savePosition()
             exoPlayer.release()
-            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 
@@ -3413,7 +3219,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
 
 
 
-                // Universal Gestures Layer (Single tap toggles UI, Double tap Left = -5s, Center = Pause/Play, Right = +10s)
+                // Full-surface gestures sit below the visible controls.
                 val density = androidx.compose.ui.platform.LocalDensity.current
                 val coroutineScope = rememberCoroutineScope()
 
@@ -3421,7 +3227,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
-                            detectTapGestures(
+                            playbackGestures(exoPlayer,
                                 onTap = {
                                     isControllerVisible = !isControllerVisible
                                 },
@@ -3525,14 +3331,14 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                 ) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Icon(
-                                            Icons.Filled.Replay5,
-                                            contentDescription = "Rewind 5s",
+                                            Icons.Filled.Replay10,
+                                            contentDescription = "Rewind 10s",
                                             tint = Color.White,
                                             modifier = Modifier.size(46.dp)
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = doubleTapActionText ?: "-5s",
+                                            text = doubleTapActionText ?: "-10s",
                                             color = Color.White,
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.Bold
@@ -3575,7 +3381,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                     modifier = Modifier
                                         .size(80.dp)
                                         .align(Alignment.Center)
-                                        .background(Color.Black.copy(alpha = 0.65f), shape = RoundedCornerShape(20.dp)),
+                                        .glass(20.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -3689,15 +3495,15 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                 if (viewModel.activeW2GRoom == null) {
                                     IconButton(onClick = {
                                         val safeTitle = if (subject.isTvShow) {
-                                            "${subject.name} S${viewModel.selectedSeason}E${viewModel.currentEpisode?.episodeNumber}"
+                                            "${subject.name} S${viewModel.currentEpisode?.seasonNumber}E${viewModel.currentEpisode?.episodeNumber.toString().padStart(2, '0')}"
                                         } else {
                                             subject.name
                                         }
-                                        val bestStream = viewModel.playInfo?.streamList?.let { viewModel.selectHighestQualityStream(it) }
+                                        val bestStream = viewModel.playInfo?.streamList?.let { viewModel.selectStreamByPreference(it, viewModel.defaultDownloadQuality) }
                                         val targetStream = if (viewModel.isAniFam) (viewModel.selectedStream ?: bestStream) else (bestStream ?: viewModel.selectedStream)
                                         val dlUrl = targetStream?.url?.takeIf { it.isNotEmpty() && !it.contains("b164fbfb4347792950bdfbfb563d39d9.mp4") } ?: streamUrl
                                         val cookies = targetStream?.cookie ?: viewModel.selectedStream?.cookie ?: ""
-                                        viewModel.startDownload(context, subject, safeTitle, dlUrl, cookies, viewModel.playInfo?.subTitleList ?: emptyList())
+                                        viewModel.startDownload(context, subject, safeTitle, dlUrl, cookies, viewModel.playInfo?.subTitleList ?: emptyList(), targetStream?.quality ?: viewModel.defaultDownloadQuality)
                                     }) {
                                         Icon(
                                             Icons.Filled.Download,
@@ -3933,11 +3739,11 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                     .weight(1f)
             ) {
                 if (activeSheet != null) {
-                    // Player Controller Panels (Subtitles, Dubs & Resolutions)
+                    // Player control panel
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(ObsidianDark)
+                            .glass(18.dp)
                             .padding(16.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
@@ -4032,8 +3838,10 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                         Text(currentDub, color = CinematicRed, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                                     }
 
-                                    // 2. Subtitles
-                                    val currentSub = viewModel.selectedSubtitle?.language ?: "Off"
+                                    StreamTracks(exoPlayer, C.TRACK_TYPE_AUDIO)
+
+                                // 2. Subtitles
+                                    val currentSub = viewModel.selectedSubtitle?.language ?: if (viewModel.subtitlesOff) "Off" else viewModel.embeddedLanguage ?: "Auto"
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -4050,7 +3858,9 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                         Text(currentSub, color = CinematicRed, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                                     }
 
-                                    // 3. Playback Speed
+                                    StreamTracks(exoPlayer, C.TRACK_TYPE_TEXT, viewModel::chooseEmbedded)
+
+                                // 3. Playback Speed
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -4108,7 +3918,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                 val itemsList = when (activeSheet) {
                                     "language" -> subject.resourceDetectors
                                     "season" -> viewModel.seasonsList
-                                    "subtitle" -> listOf("None") + playInfo.subTitleList.map { it.language }
+                                    "subtitle" -> listOf("Off") + playInfo.subTitleList
                                     "quality" -> playInfo.streamList
                                     "speed" -> listOf("0.5x", "0.75x", "1.0x (Normal)", "1.25x", "1.5x", "2.0x")
                                     "episodes" -> viewModel.episodesList
@@ -4130,7 +3940,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                 val isSelected = when (activeSheet) {
                                                     "language" -> viewModel.selectedResource == item
                                                     "season" -> viewModel.selectedSeason == item
-                                                    "subtitle" -> if (item == "None") viewModel.selectedSubtitle == null else viewModel.selectedSubtitle?.language == item
+                                                    "subtitle" -> if (item == "Off") viewModel.subtitlesOff else viewModel.selectedSubtitle == item
                                                     "quality" -> viewModel.selectedStream?.quality == (item as com.example.data.model.StreamItem).quality
                                                     "speed" -> {
                                                         val currentSpeed = exoPlayer.playbackParameters.speed
@@ -4155,12 +3965,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                             "language" -> viewModel.selectLanguageResource(item as com.example.data.model.ResourceDetector)
                                                             "season" -> viewModel.loadEpisodesForSeason(item as Int)
                                                             "subtitle" -> {
-                                                                if (item == "None") {
-                                                                    viewModel.selectedSubtitle = null
-                                                                } else {
-                                                                    val found = playInfo.subTitleList.find { it.language == item }
-                                                                    if (found != null) viewModel.selectedSubtitle = found
-                                                                }
+                                                                viewModel.chooseSubtitle(item as? SubtitleItem)
                                                             }
                                                             "quality" -> {
                                                                 val prevPos = exoPlayer.currentPosition
@@ -4191,7 +3996,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                         activeSheet = null
                                                     },
                                                     colors = ButtonDefaults.buttonColors(
-                                                        containerColor = if (isSelected) Color(0xFF115E59) else Color(0xFF2D2D30)
+                                                        containerColor = if (isSelected) CrimsonRed else ObsidianCard
                                                     ),
                                                     shape = RoundedCornerShape(8.dp),
                                                     modifier = Modifier
@@ -4202,13 +4007,13 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                         text = when (activeSheet) {
                                                             "language" -> (item as com.example.data.model.ResourceDetector).name
                                                             "season" -> "Season ${(item as Int).toString().padStart(2, '0')}"
-                                                            "subtitle" -> item as String
+                                                            "subtitle" -> (item as? SubtitleItem)?.language ?: "Off"
                                                             "quality" -> (item as com.example.data.model.StreamItem).quality
                                                             "speed" -> item as String
                                                             "episodes" -> (item as com.example.data.model.Episode).episodeNumber.toString().padStart(2, '0')
                                                             else -> ""
                                                         },
-                                                        color = if (isSelected) Color(0xFF2DD4BF) else Color.White,
+                                                        color = if (isSelected) GlassHighlight else Color.White,
                                                         fontSize = 13.sp,
                                                         fontWeight = FontWeight.Medium
                                                     )
@@ -4244,7 +4049,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(ObsidianDark)
+                            .glass(18.dp)
                             .padding(16.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
@@ -4258,7 +4063,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                             if (subject.resourceDetectors.isNotEmpty()) {
                                 Button(
                                     onClick = { activeSheet = "language" },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2D2D30)),
+                                    colors = ButtonDefaults.buttonColors(containerColor = ObsidianCard),
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                                 ) {
@@ -4275,7 +4080,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                             if (subject.isTvShow && viewModel.seasonsList.isNotEmpty() && !viewModel.isAniFam) {
                                 Button(
                                     onClick = { activeSheet = "season" },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2D2D30)),
+                                    colors = ButtonDefaults.buttonColors(containerColor = ObsidianCard),
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                                 ) {
@@ -4309,7 +4114,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                             selectedDownloadEpisodes.clear()
                                         },
                                         shape = RoundedCornerShape(8.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2D2D30)),
+                                        colors = ButtonDefaults.buttonColors(containerColor = ObsidianCard),
                                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                                     ) {
                                         Icon(
@@ -4364,7 +4169,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                     },
                                     shape = RoundedCornerShape(8.dp),
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (viewModel.activeW2GRoom != null) CinematicRed else Color(0xFF2D2D30)
+                                        containerColor = if (viewModel.activeW2GRoom != null) CinematicRed else ObsidianCard
                                     ),
                                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                                 ) {
@@ -4557,7 +4362,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                             }
                                                         )
                                                     },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2D2D30))
+                                                    colors = ButtonDefaults.buttonColors(containerColor = ObsidianCard)
                                                 ) {
                                                     Text("Rejoin Room", color = Color.White)
                                                 }
@@ -4592,9 +4397,9 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(8.dp))
-                                            .background(if (isSelected) Color(0xFF115E59) else Color(0xFF26262A))
+                                            .background(if (isSelected) CrimsonRed else Color(0xFF26262A))
                                             .then(
-                                                if (isSelected) Modifier.border(1.dp, Color(0xFF2DD4BF), RoundedCornerShape(8.dp)) else Modifier
+                                                if (isSelected) Modifier.border(1.dp, GlassHighlight, RoundedCornerShape(8.dp)) else Modifier
                                             )
                                             .clickable {
                                                 if (!selectedDownloadQuality.equals(q, ignoreCase = true)) {
@@ -4607,7 +4412,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                     ) {
                                         Text(
                                             text = q.uppercase(),
-                                            color = if (isSelected) Color(0xFF2DD4BF) else Color(0xFF9CA3AF),
+                                            color = if (isSelected) GlassHighlight else Color(0xFF9CA3AF),
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                             fontSize = 13.sp
                                         )
@@ -4716,7 +4521,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                         .clickable { viewModel.selectEpisode(ep) },
                                                     shape = RoundedCornerShape(8.dp),
                                                     colors = CardDefaults.cardColors(
-                                                        containerColor = if (isCurrentEp) Color(0xFF115E59) else Color(0xFF2E2E30)
+                                                        containerColor = if (isCurrentEp) CrimsonRed else ObsidianCard
                                                     )
                                                 ) {
                                                     Box(
@@ -4725,7 +4530,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                     ) {
                                                         Text(
                                                             text = ep.episodeNumber.toString().padStart(2, '0'),
-                                                            color = if (isCurrentEp) Color(0xFF2DD4BF) else Color.White,
+                                                            color = if (isCurrentEp) GlassHighlight else Color.White,
                                                             fontWeight = FontWeight.Bold,
                                                             fontSize = 14.sp
                                                         )
@@ -4872,7 +4677,8 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                         .padding(if (isPlayerSheet) 24.dp else 0.dp)
                         .fillMaxWidth(if (isPlayerSheet) 0.6f else 1f)
                         .clickable(enabled = false) {}, // prevent click-through
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E20)),
+                    colors = CardDefaults.cardColors(containerColor = ObsidianCard),
+                    border = BorderStroke(1.dp, GlassHighlight.copy(alpha = .32f)),
                     shape = if (isPlayerSheet) RoundedCornerShape(16.dp) else RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
                 ) {
                     Column(
@@ -4963,8 +4769,10 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                     Text(currentDub, color = CinematicRed, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                                 }
 
+                                StreamTracks(exoPlayer, C.TRACK_TYPE_AUDIO)
+
                                 // 2. Subtitles
-                                val currentSub = viewModel.selectedSubtitle?.language ?: "Off"
+                                val currentSub = viewModel.selectedSubtitle?.language ?: if (viewModel.subtitlesOff) "Off" else viewModel.embeddedLanguage ?: "Auto"
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -4980,6 +4788,8 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                     }
                                     Text(currentSub, color = CinematicRed, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                                 }
+
+                                StreamTracks(exoPlayer, C.TRACK_TYPE_TEXT, viewModel::chooseEmbedded)
 
                                 // 3. Playback Speed
                                 Row(
@@ -5040,7 +4850,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                             val itemsList = when (activeSheet) {
                                         "language" -> subject.resourceDetectors
                                         "season" -> viewModel.seasonsList
-                                        "subtitle" -> listOf("None") + playInfo.subTitleList.map { it.language }
+                                        "subtitle" -> listOf("Off") + playInfo.subTitleList
                                         "quality" -> playInfo.streamList
                                         "speed" -> listOf("0.5x", "0.75x", "1.0x (Normal)", "1.25x", "1.5x", "2.0x")
                                         "episodes" -> viewModel.episodesList
@@ -5063,7 +4873,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                         val isSelected = when (activeSheet) {
                                             "language" -> viewModel.selectedResource == item
                                             "season" -> viewModel.selectedSeason == item
-                                            "subtitle" -> if (item == "None") viewModel.selectedSubtitle == null else viewModel.selectedSubtitle?.language == item
+                                            "subtitle" -> if (item == "Off") viewModel.subtitlesOff else viewModel.selectedSubtitle == item
                                             "quality" -> viewModel.selectedStream?.quality == (item as com.example.data.model.StreamItem).quality
                                             "speed" -> {
                                                 val currentSpeed = exoPlayer.playbackParameters.speed
@@ -5088,12 +4898,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                     "language" -> viewModel.selectLanguageResource(item as com.example.data.model.ResourceDetector)
                                                     "season" -> viewModel.loadEpisodesForSeason(item as Int)
                                                     "subtitle" -> {
-                                                        if (item == "None") {
-                                                            viewModel.selectedSubtitle = null
-                                                        } else {
-                                                            val found = playInfo.subTitleList.find { it.language == item }
-                                                            if (found != null) viewModel.selectedSubtitle = found
-                                                        }
+                                                        viewModel.chooseSubtitle(item as? SubtitleItem)
                                                     }
                                                     "quality" -> {
                                                         val prevPos = exoPlayer.currentPosition
@@ -5124,7 +4929,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                 activeSheet = null
                                             },
                                             colors = ButtonDefaults.buttonColors(
-                                                containerColor = if (isSelected) Color(0xFF115E59) else Color(0xFF2D2D30)
+                                                containerColor = if (isSelected) CrimsonRed else ObsidianCard
                                             ),
                                             shape = RoundedCornerShape(8.dp),
                                             modifier = Modifier
@@ -5135,13 +4940,13 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                                 text = when (activeSheet) {
                                                     "language" -> (item as com.example.data.model.ResourceDetector).name
                                                     "season" -> "Season ${(item as Int).toString().padStart(2, '0')}"
-                                                    "subtitle" -> item as String
+                                                    "subtitle" -> (item as? SubtitleItem)?.language ?: "Off"
                                                     "quality" -> (item as com.example.data.model.StreamItem).quality
                                                     "speed" -> item as String
                                                     "episodes" -> (item as com.example.data.model.Episode).episodeNumber.toString().padStart(2, '0')
                                                     else -> ""
                                                 },
-                                                color = if (isSelected) Color(0xFF2DD4BF) else Color.White,
+                                                color = if (isSelected) GlassHighlight else Color.White,
                                                 fontSize = 13.sp,
                                                 fontWeight = FontWeight.Medium
                                             )
@@ -5259,11 +5064,12 @@ fun saveVideoToCameraRoll(context: android.content.Context, file: java.io.File) 
     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
         try {
             val displayName = file.name
+            val mime = when (file.extension.lowercase()) { "ts" -> "video/mp2t"; "mkv" -> "video/x-matroska"; else -> "video/mp4" }
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 val contentResolver = context.contentResolver
                 val values = android.content.ContentValues().apply {
                     put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, displayName)
-                    put(android.provider.MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                    put(android.provider.MediaStore.Video.Media.MIME_TYPE, mime)
                     put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, "DCIM/Camera")
                     put(android.provider.MediaStore.Video.Media.IS_PENDING, 1)
                 }
@@ -5288,7 +5094,7 @@ fun saveVideoToCameraRoll(context: android.content.Context, file: java.io.File) 
                 android.media.MediaScannerConnection.scanFile(
                     context,
                     arrayOf(targetFile.absolutePath),
-                    arrayOf("video/mp4"),
+                    arrayOf(mime),
                     null
                 )
             }
@@ -5385,113 +5191,6 @@ fun DownloadItemOptionsMenu(
     }
 }
 
-fun toggleDownloadPauseResume(
-    context: android.content.Context,
-    active: com.example.ui.viewmodel.ActiveDownload,
-    isPaused: Boolean
-) {
-    val manager = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager ?: return
-    var succeeded = false
-
-    if (isPaused) {
-        // --- RESUME ---
-        // 1. Try AOSP hidden method: resumeDownload(long... ids)
-        try {
-            val method = manager.javaClass.getMethod("resumeDownload", LongArray::class.java)
-            method.invoke(manager, longArrayOf(active.id))
-            succeeded = true
-        } catch (_: Throwable) {
-            // 2. Try single-primitive method: resumeDownload(long id)
-            try {
-                val method = manager.javaClass.getMethod("resumeDownload", Long::class.javaPrimitiveType)
-                method.invoke(manager, active.id)
-                succeeded = true
-            } catch (_: Throwable) {}
-        }
-
-        // 3. Try direct ContentResolver update (Downloads.Impl CONTROL_RUN = 0)
-        if (!succeeded) {
-            try {
-                val baseUri = android.net.Uri.parse("content://downloads/my_downloads")
-                val values = android.content.ContentValues().apply {
-                    put("control", 0) // CONTROL_RUN
-                    put("status", 190) // STATUS_PENDING
-                }
-                val updated = context.contentResolver.update(
-                    baseUri,
-                    values,
-                    "_id = ?",
-                    arrayOf(active.id.toString())
-                )
-                if (updated > 0) succeeded = true
-            } catch (_: Throwable) {}
-        }
-
-        // 4. Try restartDownload(long... ids)
-        if (!succeeded) {
-            try {
-                val method = manager.javaClass.getMethod("restartDownload", LongArray::class.java)
-                method.invoke(manager, longArrayOf(active.id))
-                succeeded = true
-            } catch (_: Throwable) {}
-        }
-
-        // 5. Fallback for vendor-locked ROMs (Realme / ColorOS): Re-enqueue download if stalled/paused
-        if (!succeeded && active.url.isNotBlank()) {
-            try {
-                manager.remove(active.id)
-                downloadVideo(context, active.url, active.title, showToast = false)
-                succeeded = true
-            } catch (_: Throwable) {}
-        }
-
-        if (succeeded) {
-            android.widget.Toast.makeText(context, "Resuming download...", android.widget.Toast.LENGTH_SHORT).show()
-        } else {
-            android.widget.Toast.makeText(context, "Could not resume download on this device", android.widget.Toast.LENGTH_SHORT).show()
-        }
-    } else {
-        // --- PAUSE ---
-        // 1. Try AOSP hidden method: pauseDownload(long... ids)
-        try {
-            val method = manager.javaClass.getMethod("pauseDownload", LongArray::class.java)
-            method.invoke(manager, longArrayOf(active.id))
-            succeeded = true
-        } catch (_: Throwable) {
-            // 2. Try single-primitive method: pauseDownload(long id)
-            try {
-                val method = manager.javaClass.getMethod("pauseDownload", Long::class.javaPrimitiveType)
-                method.invoke(manager, active.id)
-                succeeded = true
-            } catch (_: Throwable) {}
-        }
-
-        // 3. Try direct ContentResolver update (Downloads.Impl CONTROL_PAUSED = 1)
-        if (!succeeded) {
-            try {
-                val baseUri = android.net.Uri.parse("content://downloads/my_downloads")
-                val values = android.content.ContentValues().apply {
-                    put("control", 1) // CONTROL_PAUSED
-                    put("status", 193) // STATUS_PAUSED_BY_APP
-                }
-                val updated = context.contentResolver.update(
-                    baseUri,
-                    values,
-                    "_id = ?",
-                    arrayOf(active.id.toString())
-                )
-                if (updated > 0) succeeded = true
-            } catch (_: Throwable) {}
-        }
-
-        if (succeeded) {
-            android.widget.Toast.makeText(context, "Download paused", android.widget.Toast.LENGTH_SHORT).show()
-        } else {
-            android.widget.Toast.makeText(context, "Pause is not supported on this device", android.widget.Toast.LENGTH_SHORT).show()
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadScreen(viewModel: MovieViewModel) {
@@ -5530,7 +5229,7 @@ fun DownloadScreen(viewModel: MovieViewModel) {
                         val query = android.app.DownloadManager.Query().setFilterByStatus(
                             android.app.DownloadManager.STATUS_RUNNING or 
                             android.app.DownloadManager.STATUS_PENDING or 
-                            android.app.DownloadManager.STATUS_PAUSED
+                            android.app.DownloadManager.STATUS_PAUSED or android.app.DownloadManager.STATUS_FAILED
                         )
                         manager.query(query)?.use { cursor ->
                             val idIdx = cursor.getColumnIndex(android.app.DownloadManager.COLUMN_ID)
@@ -5566,14 +5265,14 @@ fun DownloadScreen(viewModel: MovieViewModel) {
                     .flatMap { dir ->
                         dir.walkTopDown()
                             .maxDepth(4)
-                            .filter { it.isFile && it.extension.equals("mp4", ignoreCase = true) }
+                            .filter { it.isFile && it.extension.lowercase() in setOf("mp4", "ts", "mkv") }
                             .toList()
                     }
                     .distinctBy { it.absolutePath }
                     .sortedBy { it.name }
 
+                val combined = DownloadQueue.snapshot(context) + currentActive
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    val combined = (viewModel.inAppDownloads + currentActive).distinctBy { it.id }
                     viewModel.activeDownloads = combined
                     if (viewModel.downloadedFiles.size != scanned.size || viewModel.downloadedFiles.map { it.name } != scanned.map { it.name }) {
                         viewModel.downloadedFiles = scanned
@@ -5674,7 +5373,7 @@ fun DownloadScreen(viewModel: MovieViewModel) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(com.example.ui.theme.ObsidianCard, RoundedCornerShape(10.dp))
+                                    .glass(14.dp)
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -5716,25 +5415,32 @@ fun DownloadScreen(viewModel: MovieViewModel) {
                                         trackColor = ObsidianDark
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
-                                    val statusText = when (active.status) {
+                                    val statusText = active.detail.ifEmpty { when (active.status) {
                                         android.app.DownloadManager.STATUS_PAUSED -> {
                                             if (active.reason == android.app.DownloadManager.PAUSED_WAITING_FOR_NETWORK ||
                                                 active.reason == android.app.DownloadManager.PAUSED_QUEUED_FOR_WIFI) {
                                                 "Waiting for network..."
                                             } else {
-                                                "Paused"
+                                                if (active.reason == android.app.DownloadManager.PAUSED_WAITING_TO_RETRY) "Retrying" else "Paused · ${active.reason}"
                                             }
                                         }
-                                        android.app.DownloadManager.STATUS_PENDING -> "Pending..."
-                                        else -> "Downloading..."
-                                    }
+                                        android.app.DownloadManager.STATUS_FAILED -> "Failed · Android error ${active.reason}"
+                                        android.app.DownloadManager.STATUS_PENDING -> "Queued"
+                                        else -> "Downloading"
+                                    } }
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "${active.progress}% (${(active.downloadedBytes / (1024 * 1024))}MB / ${if (active.totalBytes > 0) (active.totalBytes / (1024 * 1024)).toString() + "MB" else "Unknown"}) • $statusText",
+                                            text = buildString {
+                                                append(statusText)
+                                                if (active.progress >= 0) append(" · ${active.progress}%")
+                                                append(" · " + android.text.format.Formatter.formatShortFileSize(context, active.downloadedBytes))
+                                                if (active.totalBytes > 0) append(" / " + android.text.format.Formatter.formatShortFileSize(context, active.totalBytes))
+                                                if (active.bytesPerSecond > 0) append(" · " + android.text.format.Formatter.formatShortFileSize(context, active.bytesPerSecond) + "/s")
+                                            },
                                             color = if (active.status == android.app.DownloadManager.STATUS_PAUSED) Color(0xFFFBBF24) else TextSecondary,
                                             fontSize = 11.sp
                                         )
@@ -5744,12 +5450,13 @@ fun DownloadScreen(viewModel: MovieViewModel) {
                                 Spacer(modifier = Modifier.width(8.dp))
 
                                 // Pause / Resume & Cancel Control Buttons
-                                val isPaused = active.status == android.app.DownloadManager.STATUS_PAUSED
+                                val isPaused = active.status == android.app.DownloadManager.STATUS_PAUSED || active.status == android.app.DownloadManager.STATUS_FAILED
                                 val manager = remember { context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager }
 
-                                IconButton(
+                                if (active.id < 0) IconButton(
                                     onClick = {
-                                        toggleDownloadPauseResume(context, active, isPaused)
+                                        val id = (-active.id).toInt()
+                                        if (isPaused) DownloadQueue.resume(context, id) else DownloadQueue.stop(context, id, false)
                                     },
                                     modifier = Modifier.size(32.dp)
                                 ) {
@@ -5763,8 +5470,8 @@ fun DownloadScreen(viewModel: MovieViewModel) {
 
                                 IconButton(
                                     onClick = {
-                                        viewModel.cancelInAppDownload(active.id)
-                                        manager?.remove(active.id)
+                                        if (active.id < 0) DownloadQueue.stop(context, (-active.id).toInt(), true)
+                                        else manager?.remove(active.id)
                                     },
                                     modifier = Modifier.size(32.dp)
                                 ) {
@@ -5949,7 +5656,7 @@ fun DownloadScreen(viewModel: MovieViewModel) {
                                 }
                             }
                             
-                            Column(modifier = Modifier.fillMaxWidth().background(com.example.ui.theme.ObsidianCard, RoundedCornerShape(10.dp))) {
+                            Column(modifier = Modifier.fillMaxWidth().glass(14.dp)) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -6289,7 +5996,7 @@ fun DownloadScreen(viewModel: MovieViewModel) {
                                     Box(
                                         modifier = Modifier
                                             .size(44.dp)
-                                            .background(com.example.ui.theme.ObsidianCard, RoundedCornerShape(10.dp)),
+                                            .glass(14.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = TextSecondary)
@@ -6331,7 +6038,7 @@ fun DownloadScreen(viewModel: MovieViewModel) {
                         Box(
                             modifier = Modifier
                                 .size(44.dp)
-                                .background(com.example.ui.theme.ObsidianCard, RoundedCornerShape(10.dp)),
+                                .glass(14.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(Icons.Filled.MoreHoriz, contentDescription = "More", tint = TextPrimary)
@@ -6802,12 +6509,12 @@ fun OfflinePlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Universal Gestures Layer (Single tap toggles UI, Double tap Left = -5s, Center = Pause/Play, Right = +10s)
+        // Full-surface gestures sit below the visible controls.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    detectTapGestures(
+                    playbackGestures(exoPlayer,
                         onTap = {
                             isOfflineControllerVisible = !isOfflineControllerVisible
                         },
@@ -6819,12 +6526,12 @@ fun OfflinePlayerScreen(
 
                             when {
                                 x < leftBoundary -> {
-                                    // Left: rewind 5s
+                                    // Left: rewind 10s
                                     val current = exoPlayer.currentPosition
-                                    val target = (current - 5000L).coerceAtLeast(0L)
+                                    val target = (current - 10000L).coerceAtLeast(0L)
                                     exoPlayer.seekTo(target)
                                     offlineDoubleTapSide = "left"
-                                    offlineDoubleTapText = "-5s"
+                                    offlineDoubleTapText = "-10s"
                                     offlineGestureTrigger = System.currentTimeMillis()
                                 }
                                 x > rightBoundary -> {
@@ -6881,9 +6588,9 @@ fun OfflinePlayerScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Filled.Replay5, contentDescription = "Rewind 5s", tint = Color.White, modifier = Modifier.size(46.dp))
+                                Icon(Icons.Filled.Replay10, contentDescription = "Rewind 10s", tint = Color.White, modifier = Modifier.size(46.dp))
                                 Spacer(modifier = Modifier.height(4.dp))
-                                Text(text = offlineDoubleTapText ?: "-5s", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                Text(text = offlineDoubleTapText ?: "-10s", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -6912,7 +6619,7 @@ fun OfflinePlayerScreen(
                             modifier = Modifier
                                 .size(80.dp)
                                 .align(Alignment.Center)
-                                .background(Color.Black.copy(alpha = 0.65f), shape = RoundedCornerShape(20.dp)),
+                                .glass(20.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -7150,7 +6857,8 @@ fun OfflinePlayerScreen(
                         .padding(if (isOfflineFullscreen) 24.dp else 0.dp)
                         .fillMaxWidth(if (isOfflineFullscreen) 0.6f else 1f)
                         .clickable(enabled = false) {},
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E20)),
+                    colors = CardDefaults.cardColors(containerColor = ObsidianCard),
+                    border = BorderStroke(1.dp, GlassHighlight.copy(alpha = .32f)),
                     shape = if (isOfflineFullscreen) RoundedCornerShape(16.dp) else RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
                 ) {
                     Column(
@@ -7270,7 +6978,7 @@ fun OfflinePlayerScreen(
                                                     activeOfflineSheet = null
                                                 },
                                                 colors = ButtonDefaults.buttonColors(
-                                                    containerColor = if (isSelected) Color(0xFF115E59) else Color(0xFF2D2D30)
+                                                    containerColor = if (isSelected) CrimsonRed else ObsidianCard
                                                 ),
                                                 shape = RoundedCornerShape(8.dp),
                                                 modifier = Modifier
@@ -7279,7 +6987,7 @@ fun OfflinePlayerScreen(
                                             ) {
                                                 Text(
                                                     text = subItem.second,
-                                                    color = if (isSelected) Color(0xFF2DD4BF) else Color.White,
+                                                    color = if (isSelected) GlassHighlight else Color.White,
                                                     fontSize = 13.sp,
                                                     fontWeight = FontWeight.Medium,
                                                     maxLines = 1,
@@ -7324,7 +7032,7 @@ fun OfflinePlayerScreen(
                                                     activeOfflineSheet = null
                                                 },
                                                 colors = ButtonDefaults.buttonColors(
-                                                    containerColor = if (isSelected) Color(0xFF115E59) else Color(0xFF2D2D30)
+                                                    containerColor = if (isSelected) CrimsonRed else ObsidianCard
                                                 ),
                                                 shape = RoundedCornerShape(8.dp),
                                                 modifier = Modifier
@@ -7333,7 +7041,7 @@ fun OfflinePlayerScreen(
                                             ) {
                                                 Text(
                                                     text = item,
-                                                    color = if (isSelected) Color(0xFF2DD4BF) else Color.White,
+                                                    color = if (isSelected) GlassHighlight else Color.White,
                                                     fontSize = 13.sp,
                                                     fontWeight = FontWeight.Medium
                                                 )

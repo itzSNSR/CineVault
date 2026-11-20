@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import com.example.ui.theme.glass
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -58,10 +59,11 @@ import kotlinx.coroutines.delay
 fun OttHubScreen(
     platform: OttPlatform,
     viewModel: MovieViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    initialQuery: String = ""
 ) {
-    var isSearchActive by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(initialQuery.isNotBlank()) }
+    var searchQuery by remember { mutableStateOf(initialQuery) }
     var searchResults by remember { mutableStateOf<List<MovieSubject>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
 
@@ -156,6 +158,7 @@ fun OttHubScreen(
         if (isSearchActive) {
             // Dedicated In-Platform Search View
             OttSearchContent(
+                viewModel = viewModel,
                 platform = platform,
                 searchQuery = searchQuery,
                 onQueryChange = { searchQuery = it },
@@ -167,6 +170,7 @@ fun OttHubScreen(
                     searchResults = emptyList()
                 },
                 onMovieClick = { movie ->
+                    viewModel.rememberSearch("OTT / ${platform.name}", searchQuery)
                     viewModel.selectSubject(movie)
                 }
             )
@@ -291,7 +295,8 @@ fun OttHubScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(480.dp)
+                            .heightIn(min = 290.dp, max = 415.dp)
+                            .aspectRatio(1.03f)
                     ) {
                         // Hero Backdrop Image
                         val backdropUrl = heroItem.backdrop ?: heroItem.poster
@@ -301,7 +306,7 @@ fun OttHubScreen(
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .clip(RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+                                .clip(RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp))
                         )
 
                         // Gradient overlays for cinematic contrast & title legibility
@@ -576,7 +581,7 @@ fun TopTenRankShelf(
 ) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        horizontalArrangement = Arrangement.spacedBy(com.example.ui.theme.GlassSpacing)
     ) {
         itemsIndexed(items.take(10), key = { idx, item -> "${item.id}_top10_$idx" }) { index, movie ->
             Box(
@@ -605,7 +610,7 @@ fun TopTenRankShelf(
 
                 // Poster Card aligned to the right so number sits cleanly on the left
                 Card(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .width(115.dp)
                         .height(168.dp)
@@ -648,7 +653,7 @@ fun OttStandardShelf(
         ) {
             itemsIndexed(items, key = { idx, item -> "${item.id}_shelf_${title}_$idx" }) { _, movie ->
                 Card(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .width(112.dp)
                         .height(165.dp)
@@ -672,6 +677,7 @@ fun OttStandardShelf(
  */
 @Composable
 fun OttSearchContent(
+    viewModel: MovieViewModel,
     platform: OttPlatform,
     searchQuery: String,
     onQueryChange: (String) -> Unit,
@@ -716,7 +722,7 @@ fun OttSearchContent(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 6.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(Color(0xFF1A1A22))
+                .glass(20.dp)
                 .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
             Row(
@@ -739,6 +745,8 @@ fun OttSearchContent(
                         )
                     }
                     BasicTextField(
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { viewModel.rememberSearch("OTT / ${platform.name}", searchQuery); defaultKeyboardAction(androidx.compose.ui.text.input.ImeAction.Done) }),
                         value = searchQuery,
                         onValueChange = onQueryChange,
                         singleLine = true,
@@ -766,6 +774,7 @@ fun OttSearchContent(
             }
         }
 
+        if (searchQuery.isBlank()) RecentSearches(viewModel, "OTT / ${platform.name}", onQueryChange)
         // Results or Loading or Empty
         if (isSearching) {
             Box(
@@ -788,7 +797,7 @@ fun OttSearchContent(
             ) {
                 itemsIndexed(searchResults, key = { idx, item -> "${item.id}_search_$idx" }) { _, movie ->
                     Card(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .aspectRatio(0.68f)

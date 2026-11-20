@@ -136,7 +136,7 @@ fun HomeScreen(viewModel: MovieViewModel) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(350.dp)
+                            .height(320.dp)
                     ) {
                         androidx.compose.foundation.pager.HorizontalPager(
                             state = pagerState,
@@ -223,7 +223,7 @@ fun HomeScreen(viewModel: MovieViewModel) {
                                         Button(
                                             onClick = { viewModel.selectSubject(heroMovie) },
                                             colors = ButtonDefaults.buttonColors(containerColor = CinematicRed),
-                                            shape = RoundedCornerShape(8.dp)
+                                            shape = RoundedCornerShape(20.dp)
                                         ) {
                                             Icon(Icons.Filled.PlayArrow, contentDescription = "Play")
                                             Spacer(modifier = Modifier.width(6.dp))
@@ -236,6 +236,8 @@ fun HomeScreen(viewModel: MovieViewModel) {
                     }
                 }
             }
+
+            item { ContinueWatching(viewModel) }
 
             // 2. OTT Platform Icons row (Visible ONLY in MovieBox provider)
             if (!viewModel.isAniFam) {
@@ -358,7 +360,7 @@ fun HomeScreen(viewModel: MovieViewModel) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(com.example.ui.theme.GlassSpacing)
                         ) {
                             rowItems.forEach { movie ->
                                 Box(modifier = Modifier.weight(1f)) {
@@ -407,7 +409,7 @@ fun HomeScreen(viewModel: MovieViewModel) {
                             Button(
                                 onClick = { viewModel.loadDashboardContent() },
                                 colors = ButtonDefaults.buttonColors(containerColor = CinematicRed),
-                                shape = RoundedCornerShape(8.dp)
+                                shape = RoundedCornerShape(20.dp)
                             ) {
                                 Icon(Icons.Filled.Refresh, contentDescription = "Retry", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -581,7 +583,7 @@ fun AllCatalogScreen(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 80.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(com.example.ui.theme.GlassSpacing),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.fillMaxSize()
             ) {

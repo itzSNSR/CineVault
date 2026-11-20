@@ -690,6 +690,10 @@ fun SettingsScreen(
                     modifier = Modifier.padding(start = 6.dp, bottom = 8.dp)
                 )
 
+                androidx.compose.foundation.Image(
+                    androidx.compose.ui.res.painterResource(com.example.R.drawable.ic_popup_logo), "CineVault",
+                    Modifier.padding(bottom = 8.dp).size(56.dp).clip(RoundedCornerShape(14.dp))
+                )
                 // Group 3: Community & Updates
                 var showSettingsTelegramDialog by remember { mutableStateOf(false) }
 

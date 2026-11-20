@@ -38,12 +38,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun updatePlaybackProgress(subject: MovieSubject, episode: Episode?, positionMs: Long, durationMs: Long) {
         playbackProgressMs = positionMs
         mediaDurationMs = durationMs
-        val historyId = if (subject.isTvShow) {
-            val ep = episode ?: return
-            "${subject.id}_S${ep.seasonNumber}_E${ep.episodeNumber}"
-        } else {
-            subject.id
-        }
+        if (subject.isTvShow && episode == null) return
+        val historyId = com.example.data.local.historyKey(prefs.isAniFam, subject.id,
+            episode?.seasonNumber ?: 0, episode?.episodeNumber ?: 0)
 
         viewModelScope.launch {
             try {

@@ -1,7 +1,7 @@
 {
-  "versionName": "4.4",
-  "versionCode": 9,
+  "versionName": "4.6",
+  "versionCode": 11,
   "forceUpdate": false,
-  "changelog": "• CineVault by SNSR\n• Add Watch Together (W2G)\n• Enhanced Live TV & AniFam\n• Improved player, downloads & controls\n• Bug fixes & performance improvements",
-  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.4/CineVault.apk"
+  "changelog": "• CineVault 4.6 by SNSR\n• New CV monogram branding: launcher, adaptive and monochrome icons, splash and Settings\n• Midnight Amethyst glass theme with the floating navigation dock\n• Library with Continue Watching, Watchlist, History and recent searches\n• Persistent download queue with resume for direct and HLS downloads\n• Live TV favorites, local search history, playback and subtitle fixes",
+  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.6/CineVault.apk"
 }

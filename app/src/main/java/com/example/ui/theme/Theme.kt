@@ -10,28 +10,28 @@ import androidx.compose.ui.graphics.Color
 private val DarkColorScheme = darkColorScheme(
     primary = CinematicRed,
     onPrimary = Color.White,
-    secondary = ObsidianCard,
-    onSecondary = TextPrimary,
+    secondary = GlassHighlight,
+    onSecondary = ObsidianDark,
     background = ObsidianDark,
     onBackground = TextPrimary,
     surface = ObsidianCard,
     onSurface = TextPrimary,
     tertiary = AccentAmber,
-    surfaceVariant = Color(0xFF1F2235),
+    surfaceVariant = Color(0xFF30263F),
     onSurfaceVariant = TextSecondary
 )
 
 private val LightColorScheme = lightColorScheme(
     primary = CinematicRed,
     onPrimary = Color.White,
-    secondary = ObsidianCard,
-    onSecondary = TextPrimary,
+    secondary = GlassHighlight,
+    onSecondary = ObsidianDark,
     background = ObsidianDark,
     onBackground = TextPrimary,
     surface = ObsidianCard,
     onSurface = TextPrimary,
     tertiary = AccentAmber,
-    surfaceVariant = Color(0xFF1F2235),
+    surfaceVariant = Color(0xFF30263F),
     onSurfaceVariant = TextSecondary
 )
 

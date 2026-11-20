@@ -235,7 +235,7 @@ private fun fetchManishWorkerChannels(): Triple<List<ManishWorkerChannelItem>, M
 
 @OptIn(UnstableApi::class)
 @Composable
-fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
+fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel, initialQuery: String = "") {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("livetv_prefs", Context.MODE_PRIVATE) }
@@ -260,8 +260,9 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
     var channels by remember { mutableStateOf<List<UnifiedChannel>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var selectedCategory by remember { mutableStateOf("All") }
-    var searchQuery by remember { mutableStateOf("") }
+    var lastCountry by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(selectedCountryCode) }
+    var selectedCategory by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("All") }
+    var searchQuery by androidx.compose.runtime.saveable.rememberSaveable(initialQuery) { mutableStateOf(initialQuery) }
     var showCountryDialog by remember { mutableStateOf(false) }
 
     // Active streaming channel state
@@ -287,7 +288,10 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
     LaunchedEffect(selectedCountryCode) {
         isLoading = true
         errorMessage = null
-        selectedCategory = "All"
+        if (lastCountry != selectedCountryCode) {
+            selectedCategory = "All"
+            lastCountry = selectedCountryCode
+        }
         try {
             val fetchedChannels = withContext(Dispatchers.IO) {
                 if (selectedCountryCode == "IN_GEO") {
@@ -481,9 +485,22 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
         }
     }
 
+    val favorites by viewModel.favoriteChannels.collectAsState()
+    val saved = remember(favorites, selectedCountryCode) { favorites.filter { it.country == selectedCountryCode }.associateBy { it.channelKey } }
+    fun key(ch: UnifiedChannel): String {
+        val source = when {
+            ch.isDirectWorker -> "worker"
+            ch.isJioTv -> "jio"
+            selectedCountryCode == "IN_GEO" -> ch.category
+            else -> "iptv"
+        }
+        return "$selectedCountryCode|$source|${ch.favoriteId ?: ch.id}"
+    }
+    val missing = remember(saved, channels) { saved - channels.map { key(it) }.toSet() }
+
     // Dynamic Categories extracted from the current channel list
     val categories = remember(channels) {
-        val list = mutableListOf("All")
+        val list = mutableListOf("All", "Favorites")
         val parsedCategories = channels.map { it.category }
             .filter { it.isNotBlank() && !it.equals("general", ignoreCase = true) }
             .distinct()
@@ -493,9 +510,9 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
     }
 
     // Filter channels by Category and Search query
-    val filteredChannels = remember(channels, selectedCategory, searchQuery) {
+    val filteredChannels = remember(channels, selectedCategory, searchQuery, saved) {
         channels.filter { ch ->
-            val matchesCategory = selectedCategory == "All" || ch.category.equals(selectedCategory, ignoreCase = true)
+            val matchesCategory = (selectedCategory == "Favorites" && key(ch) in saved) || selectedCategory == "All" || ch.category.equals(selectedCategory, ignoreCase = true)
             val matchesSearch = searchQuery.isBlank() || ch.name.contains(searchQuery, ignoreCase = true)
             matchesCategory && matchesSearch
         }
@@ -579,6 +596,11 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
 
             // Search Box
             OutlinedTextField(
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = {
+                    viewModel.rememberSearch("Live TV", searchQuery)
+                    defaultKeyboardAction(androidx.compose.ui.text.input.ImeAction.Done)
+                }),
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier
@@ -607,6 +629,17 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
                 shape = RoundedCornerShape(12.dp)
             )
 
+            if (searchQuery.isBlank()) RecentSearches(viewModel, "Live TV") { searchQuery = it }
+            if (selectedCategory == "Favorites" && !isLoading && errorMessage == null && missing.isNotEmpty()) {
+                LazyRow(contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    items(missing.values.toList()) { favorite ->
+                        InputChip(selected = true,
+                            onClick = { viewModel.toggleChannel(favorite.channelKey, favorite.country, favorite.name, true) },
+                            label = { Text("${favorite.name} · Unavailable") },
+                            trailingIcon = { Icon(Icons.Filled.Close, "Remove favorite") })
+                    }
+                }
+            }
             // Category Tabs Bar
             if (categories.size > 1) {
                 LazyRow(
@@ -699,9 +732,12 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
                                             rowItems.forEach { channel ->
                                                 Box(modifier = Modifier.weight(1f)) {
                                                     ChannelItemCard(
+                                                        favorite = key(channel) in saved,
+                                                        onStar = { viewModel.toggleChannel(key(channel), selectedCountryCode, channel.name, key(channel) in saved) },
                                                         channel = channel,
                                                         onClick = {
-                                                            viewModel?.isLiveTvPlaying = true
+                                                            viewModel.rememberSearch("Live TV", searchQuery)
+                                                            viewModel.isLiveTvPlaying = true
                                                             activePlayingChannel = channel
                                                         }
                                                     )
@@ -729,9 +765,12 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
                 ) {
                     itemsIndexed(filteredChannels, key = { index, channel -> "${channel.id}_${channel.name}_$index" }) { _, channel ->
                         ChannelItemCard(
+                            favorite = key(channel) in saved,
+                            onStar = { viewModel.toggleChannel(key(channel), selectedCountryCode, channel.name, key(channel) in saved) },
                             channel = channel,
                             onClick = {
-                                viewModel?.isLiveTvPlaying = true
+                                viewModel.rememberSearch("Live TV", searchQuery)
+                                viewModel.isLiveTvPlaying = true
                                 activePlayingChannel = channel
                             }
                         )
@@ -787,6 +826,8 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel? = null) {
 private fun parseM3uChannels(content: String): List<UnifiedChannel> {
     val channels = mutableListOf<UnifiedChannel>()
     val lines = content.lines()
+    val tvgId = Regex("""tvg-id="([^"]+)"""")
+    var channelId: String? = null
     var currentName = ""
     var currentLogo: String? = null
     var currentGroup = "General"
@@ -797,6 +838,7 @@ private fun parseM3uChannels(content: String): List<UnifiedChannel> {
     for (line in lines) {
         val trimmed = line.trim()
         if (trimmed.startsWith("#EXTINF:")) {
+            channelId = tvgId.find(trimmed)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }
             currentLogo = logoRegex.find(trimmed)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
             val rawGroup = groupRegex.find(trimmed)?.groupValues?.get(1)?.trim() ?: ""
             // Clean multi-group titles (take the first if separated by semicolon)
@@ -808,6 +850,7 @@ private fun parseM3uChannels(content: String): List<UnifiedChannel> {
                 channels.add(
                     UnifiedChannel(
                         id = trimmed,
+                        favoriteId = channelId,
                         name = currentName,
                         logo = currentLogo,
                         category = currentGroup,
@@ -892,6 +935,8 @@ private fun getSonyChannelLogo(name: String): String {
 
 @Composable
 fun ChannelItemCard(
+    favorite: Boolean,
+    onStar: () -> Unit,
     channel: UnifiedChannel,
     onClick: () -> Unit
 ) {
@@ -937,6 +982,11 @@ fun ChannelItemCard(
                         tint = TextSecondary,
                         modifier = Modifier.size(28.dp)
                     )
+                }
+                IconButton(onClick = onStar, modifier = Modifier.align(Alignment.TopEnd).size(36.dp)
+                    .background(ObsidianCard.copy(alpha = .9f), androidx.compose.foundation.shape.CircleShape)) {
+                    Icon(if (favorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        if (favorite) "Remove favorite" else "Favorite channel", tint = if (favorite) com.example.ui.theme.GlassHighlight else TextSecondary)
                 }
             }
 

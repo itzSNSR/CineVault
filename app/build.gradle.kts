@@ -18,8 +18,8 @@ android {
     applicationId = "app.cinevault.classic"
     minSdk = 24
     targetSdk = 36
-    versionCode = 9
-    versionName = "4.4"
+    versionCode = 11
+    versionName = "4.6"
   }
 
   val keystorePropertiesFile = rootProject.file("key.properties")
@@ -80,6 +80,7 @@ googleServices {
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
+  testImplementation("junit:junit:4.13.2")
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
