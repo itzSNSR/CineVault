@@ -17,6 +17,7 @@
 - **Streaming** — ExoPlayer (Media3) playback with HLS/DASH, subtitle support and quality selection
 - **Offline downloads** — save titles to `Movies/CineVault` and play them later in the built-in player
 - **Watchlist, favourites and history** — stored locally with Room
+- **Library** — Continue Watching, watchlist, history and recent searches in one place
 - **Watch Together** — shared rooms for synced group watching
 - **Live TV** — IPTV playlists with a dedicated player
 - **OTT hub** — quick access to where a title is available across major platforms
@@ -99,11 +100,11 @@ The app reads a small manifest on startup and when you tap **Settings → Check 
 
 ```json
 {
-  "versionName": "4.4",
-  "versionCode": 9,
+  "versionName": "4.6",
+  "versionCode": 11,
   "forceUpdate": false,
   "changelog": "• What changed in this build",
-  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.4/CineVault.apk"
+  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.6/CineVault.apk"
 }
 ```
 
