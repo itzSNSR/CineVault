@@ -6256,7 +6256,10 @@ fun OfflinePlayerScreen(
     val localSubtitles = remember(fileToPlay) {
         val parent = fileToPlay.parentFile
         val found = mutableListOf<Pair<java.io.File, String>>()
-        val searchDirs = listOfNotNull(parent, parent?.parentFile).distinct()
+        // Episode subtitle files must come from the current episode folder.
+        // Do not load the parent show's manifest, which could belong to E1.
+        val searchDirs = if (epMatch != null) listOfNotNull(parent) else
+            listOfNotNull(parent, parent?.parentFile).distinct()
 
         // 1. Try reading subtitles.json from episode or show folder
         for (dir in searchDirs) {
@@ -6325,6 +6328,21 @@ fun OfflinePlayerScreen(
                     val jsonFile = java.io.File(parent, "subtitles.json")
                     jsonFile.writeText(arr.toString())
                 } catch (_: Throwable) {}
+            }
+        }
+
+        // If different episodes share a directory, reject SxxExx captions
+        // that belong to a different episode of the show.
+        if (epMatch != null) {
+            val currentSeason = epMatch.groupValues[1].toIntOrNull()
+            val currentEpisodeNumber = epMatch.groupValues[2].toIntOrNull()
+            val episodeInFilename = Regex("(?i)S(\\d+)[_ .-]?E(\\d+)")
+            found.removeAll { (subtitleFile, _) ->
+                val match = episodeInFilename.find(subtitleFile.nameWithoutExtension)
+                match != null && (
+                    match.groupValues[1].toIntOrNull() != currentSeason ||
+                        match.groupValues[2].toIntOrNull() != currentEpisodeNumber
+                )
             }
         }
 
