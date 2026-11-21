@@ -20,6 +20,7 @@ import com.example.data.model.SubtitleItem
 import com.example.data.network.MovieBoxRetrofitClient
 import com.example.data.preferences.PreferencesManager
 import com.example.data.repository.MovieRepository
+import com.example.util.SubtitlePreference
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
@@ -835,31 +836,58 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     private var detailJob: Job? = null
     private var seasonJob: Job? = null
     private var playbackJob: Job? = null
+    private var playbackGeneration = 0
     private val playbackPrefs = application.getSharedPreferences("playback_preferences", 0)
     var subtitlesOff by mutableStateOf(playbackPrefs.getBoolean("subtitles_off", false))
         private set
-    var embeddedLanguage by mutableStateOf(playbackPrefs.getString("embedded_language", null))
+    var embeddedLanguage by mutableStateOf(
+        SubtitlePreference.languageTag(playbackPrefs.getString("embedded_language", null))
+    )
         private set
     var playbackEntry by mutableStateOf<HistoryEntity?>(null)
         private set
 
+    /**
+     * Manual embedded caption choice. Stores a normalized Media3 language tag
+     * ("en"), never the provider's display label, so the choice can be matched
+     * against the embedded tracks of every new episode.
+     */
     fun chooseEmbedded(language: String?) {
-        embeddedLanguage = language ?: "und"
+        embeddedLanguage = SubtitlePreference.languageTag(language) ?: SubtitlePreference.UNDETERMINED
         selectedSubtitle = null
         subtitlesOff = false
-        playbackPrefs.edit().putString("embedded_language", embeddedLanguage).putBoolean("subtitles_off", false).apply()
+        playbackPrefs.edit()
+            .putString("embedded_language", embeddedLanguage)
+            .putBoolean("subtitles_off", false)
+            .apply()
     }
 
+    /** Manual external subtitle choice. Only the language is persisted. */
     fun chooseSubtitle(subtitle: SubtitleItem?) {
         embeddedLanguage = null
         subtitlesOff = subtitle == null
         selectedSubtitle = subtitle
-        playbackPrefs.edit().remove("embedded_language").putBoolean("subtitles_off", subtitlesOff).apply {
-            if (subtitle != null) putString("subtitle_language", subtitle.language)
-        }.apply()
+        val language = subtitle?.let { SubtitlePreference.languageTag(it.language) ?: it.language }
+        playbackPrefs.edit()
+            .remove("embedded_language")
+            .putBoolean("subtitles_off", subtitlesOff)
+            .apply {
+                if (language != null) putString("subtitle_language", language)
+            }
+            .apply()
+    }
+
+    /** Saved language as a normalized tag; older builds may have stored a label. */
+    private fun preferredSubtitleLanguage(): String? {
+        val raw = playbackPrefs.getString("subtitle_language", null)
+        if (raw.isNullOrBlank()) return null
+        return SubtitlePreference.languageTag(raw) ?: raw
     }
 
     fun cancelPlaybackRequest() {
+        // Invalidate any in-flight resolve so a request that is no longer on
+        // screen cannot publish subtitles for the new episode.
+        playbackGeneration++
         playbackJob?.cancel()
         isPlaybackLoading = false
     }
@@ -1983,6 +2011,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun resolvePlayback(requested: Episode?, startOver: Boolean, history: HistoryEntity? = null) {
         playbackJob?.cancel()
+        val generation = ++playbackGeneration
         playInfo = null
         selectedSubtitle = null
         selectedStream = null
@@ -2011,24 +2040,30 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 val rawKey = id.substringAfter('_')
                 val saved = repository.getHistoryById(id) ?: repository.getHistoryById(rawKey) ?: history
                 ensureActive()
+                // A newer episode selection (or a cancelled request) always wins,
+                // so a slow older response cannot overwrite the new subtitles.
+                if (generation != playbackGeneration) return@launch
                 currentEpisode = ep
                 playbackEntry = HistoryEntity(id, subject.id, subject.name, subject.poster, subject.isTvShow, season, episode, 0, 0)
                 playbackProgressMs = if (startOver) 0 else saved?.resumePosition ?: 0
                 mediaDurationMs = saved?.totalTime ?: 0
-                val preferred = playbackPrefs.getString("subtitle_language", null)
-                selectedSubtitle = when {
-                    subtitlesOff || embeddedLanguage != null -> null
-                    preferred != null -> info.subTitleList.firstOrNull { it.language.equals(preferred, true) }
-                    selectedResource?.name?.contains("dub", true) == true -> null
-                    else -> info.subTitleList.firstOrNull { it.language.contains("eng", true) } ?: info.subTitleList.firstOrNull()
-                }
+                // Bind the preference to THIS episode's own caption URL. The old
+                // episode's SubtitleItem is never reused, and English is the default.
+                selectedSubtitle = SubtitlePreference.forEpisode(
+                    available = info.subTitleList,
+                    preferredLanguage = preferredSubtitleLanguage(),
+                    subtitlesOff = subtitlesOff || embeddedLanguage != null,
+                    allowAutomaticEnglish = selectedResource?.name?.contains("dub", true) != true
+                )
                 selectedStream = selectStreamByPreference(info.streamList, defaultStreamQuality)
                 isPlaying = true
                 playInfo = info
             } catch (e: Exception) {
-                if (isActive) safeToast(getApplication(), e.message ?: "Unable to open stream")
+                if (isActive && generation == playbackGeneration) {
+                    safeToast(getApplication(), e.message ?: "Unable to open stream")
+                }
             } finally {
-                if (isActive) isPlaybackLoading = false
+                if (isActive && generation == playbackGeneration) isPlaybackLoading = false
             }
         }
     }
