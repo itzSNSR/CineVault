@@ -2016,12 +2016,14 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 playbackProgressMs = if (startOver) 0 else saved?.resumePosition ?: 0
                 mediaDurationMs = saved?.totalTime ?: 0
                 val preferred = playbackPrefs.getString("subtitle_language", null)
-                selectedSubtitle = when {
-                    subtitlesOff || embeddedLanguage != null -> null
-                    preferred != null -> info.subTitleList.firstOrNull { it.language.equals(preferred, true) }
-                    selectedResource?.name?.contains("dub", true) == true -> null
-                    else -> info.subTitleList.firstOrNull { it.language.contains("eng", true) } ?: info.subTitleList.firstOrNull()
-                }
+                // Rebind the user's preferred language to THIS episode's caption URL.
+                // An unmatched old label must not prevent the English fallback.
+                selectedSubtitle = com.example.util.SubtitlePreference.forEpisode(
+                    available = info.subTitleList,
+                    preferredLanguage = preferred,
+                    subtitlesOff = subtitlesOff,
+                    embeddedLanguage = embeddedLanguage
+                )
                 selectedStream = selectStreamByPreference(info.streamList, defaultStreamQuality)
                 isPlaying = true
                 playInfo = info
