@@ -2910,7 +2910,11 @@ fun PlayerScreen(viewModel: MovieViewModel) {
 
             exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
                 .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-                .setPreferredTextLanguage(viewModel.embeddedLanguage ?: viewModel.selectedSubtitle?.language)
+                .setPreferredTextLanguage(
+                    viewModel.embeddedLanguage
+                        ?: com.example.util.SubtitlePreference.languageTag(viewModel.selectedSubtitle?.language)
+                        ?: "en"
+                )
                 .setSelectUndeterminedTextLanguage(viewModel.embeddedLanguage == "und")
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, viewModel.subtitlesOff).build()
             val mediaItemBuilder = MediaItem.Builder().setMediaId(entry.id).setUri(Uri.parse(streamUrl))
@@ -2923,7 +2927,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                 val subtitleConfig = MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl))
                     .setId("cv-sub-" + entry.id)
                     .setMimeType(mimeType)
-                    .setLanguage(viewModel.selectedSubtitle?.language ?: "en")
+                    .setLanguage(com.example.util.SubtitlePreference.languageTag(viewModel.selectedSubtitle?.language) ?: "en")
                     .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
                     .build()
                 mediaItemBuilder.setSubtitleConfigurations(listOf(subtitleConfig))
@@ -2935,6 +2939,13 @@ fun PlayerScreen(viewModel: MovieViewModel) {
             )
             val mediaSource = mediaSourceFactory.createMediaSource(mediaItemBuilder.build())
 
+            // Subtitle/quality changes rebuild the same media item: retain its live
+            // playback position. A different episode must use its own saved position.
+            val restorePositionMs = if (exoPlayer.currentMediaItem?.mediaId == entry.id) {
+                exoPlayer.currentPosition.coerceAtLeast(0L)
+            } else {
+                viewModel.playbackProgressMs.coerceAtLeast(0L)
+            }
             val currentEpisode = viewModel.currentEpisode
             val episodes = viewModel.episodesList
             if (subject.isTvShow && episodes.isNotEmpty() && currentEpisode != null) {
@@ -2952,7 +2963,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                             )
                         }
                     }
-                    exoPlayer.setMediaSources(mediaSources, currentIndex, viewModel.playbackProgressMs)
+                    exoPlayer.setMediaSources(mediaSources, currentIndex, restorePositionMs)
                 } else {
                     exoPlayer.setMediaSource(mediaSource)
                 }
@@ -2960,8 +2971,12 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                 exoPlayer.setMediaSource(mediaSource)
             }
             exoPlayer.prepare()
-            if (viewModel.playbackProgressMs > 0) {
-                exoPlayer.seekTo(viewModel.playbackProgressMs)
+            // setMediaSources(startPositionMs) already restores the playlist position.
+            if (!(subject.isTvShow && episodes.isNotEmpty() && currentEpisode != null &&
+                    episodes.any { it.episodeId == currentEpisode.episodeId }) &&
+                restorePositionMs > 0L
+            ) {
+                exoPlayer.seekTo(restorePositionMs)
             }
             if (viewModel.isPlaying) {
                 exoPlayer.play()
@@ -6325,7 +6340,13 @@ fun OfflinePlayerScreen(
         uniqueFound
     }
 
-    var selectedOfflineSub by remember { mutableStateOf<Pair<java.io.File, String>?>(null) }
+    // Automatically select the new file's English subtitle, if available.
+    // Never carry a subtitle file from one episode into another.
+    var selectedOfflineSub by remember(fileToPlay) {
+        mutableStateOf(localSubtitles.firstOrNull {
+            com.example.util.SubtitlePreference.languageTag(it.second) == "en"
+        })
+    }
     var selectedOfflineSpeed by remember { mutableStateOf(1.0f) }
     var activeOfflineSheet by remember { mutableStateOf<String?>(null) } // "player_settings", "subtitle", "speed"
 
@@ -6383,7 +6404,7 @@ fun OfflinePlayerScreen(
                 }
                 androidx.media3.common.MediaItem.SubtitleConfiguration.Builder(android.net.Uri.fromFile(subFile))
                     .setMimeType(mimeType)
-                    .setLanguage(display)
+                    .setLanguage(com.example.util.SubtitlePreference.languageTag(display))
                     .setLabel(display)
                     .build()
             }
@@ -6397,11 +6418,17 @@ fun OfflinePlayerScreen(
         }
     }
 
-    // Default subtitles to disabled until user picks one in settings
+    // English captions are enabled by default when this episode provides them.
+    // A manual Off selection still disables them for the current file.
     LaunchedEffect(exoPlayer) {
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
             .buildUpon()
-            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, true)
+            .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_TEXT)
+            .setPreferredTextLanguage("en")
+            .setTrackTypeDisabled(
+                androidx.media3.common.C.TRACK_TYPE_TEXT,
+                localSubtitles.isNotEmpty() && selectedOfflineSub == null
+            )
             .build()
     }
 
@@ -6961,7 +6988,8 @@ fun OfflinePlayerScreen(
                                                         val paramsBuilder = exoPlayer.trackSelectionParameters
                                                             .buildUpon()
                                                             .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
-                                                            .setPreferredTextLanguage(subItem.second)
+                                                            .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_TEXT)
+                                                            .setPreferredTextLanguage(com.example.util.SubtitlePreference.languageTag(subItem.second))
 
                                                         val textTracks = exoPlayer.currentTracks.groups.filter { it.type == androidx.media3.common.C.TRACK_TYPE_TEXT }
                                                         for (group in textTracks) {
