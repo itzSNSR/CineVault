@@ -1,7 +1,10 @@
 # CineVault website
 
-The official CineVault download landing page. It is published with GitHub Pages from
-`main` → `/docs` at **https://itzsnsr.github.io/CineVault/**.
+The official CineVault download landing page source. Publish it with GitHub Pages from
+`main` → `/docs` (enable Pages in the repository settings); the intended URL is
+**https://itzsnsr.github.io/CineVault/**.
+
+GitHub Pages is not enabled yet, so that URL still returns 404.
 
 Plain HTML, CSS and JavaScript — no build step, no framework, no API keys.
 

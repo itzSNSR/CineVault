@@ -32,10 +32,11 @@ Everything ships in one APK, no account required to browse.
 
 ## Official website
 
-The download landing page lives in [`docs/`](docs/) and is published with GitHub Pages
-from `main` → `/docs` at **https://itzsnsr.github.io/CineVault/**. It is plain HTML, CSS
-and JavaScript with no build step; see [`docs/README.md`](docs/README.md) for local
-preview, asset and deployment details.
+The download landing page source lives in [`docs/`](docs/) and is ready for GitHub Pages
+from `main` → `/docs`. It is plain HTML, CSS and JavaScript with no build step; see
+[`docs/README.md`](docs/README.md) for local preview, asset and deployment details.
+Enable Pages in the repository settings to serve it at
+**https://itzsnsr.github.io/CineVault/**; the hosted site is not enabled yet.
 
 ---
 
