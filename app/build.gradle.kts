@@ -18,8 +18,8 @@ android {
     applicationId = "app.cinevault.classic"
     minSdk = 24
     targetSdk = 36
-    versionCode = 11
-    versionName = "4.6"
+    versionCode = 12
+    versionName = "4.7"
   }
 
   val keystorePropertiesFile = rootProject.file("key.properties")
@@ -27,6 +27,7 @@ android {
   if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
   }
+  val hasReleaseSigning = keystorePropertiesFile.exists()
 
   signingConfigs {
     create("release") {
@@ -51,7 +52,7 @@ android {
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.getByName("release")
+      signingConfig = if (hasReleaseSigning) signingConfigs.getByName("release") else null
     }
     debug {
     }

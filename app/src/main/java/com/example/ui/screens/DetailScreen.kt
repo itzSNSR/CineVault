@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
 import com.example.data.local.resumePosition
+import com.example.ui.components.LiquidDots
+import com.example.ui.components.LiquidFilterChip
+import com.example.ui.components.LiquidGlassButton
 import com.example.ui.theme.glass
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
@@ -202,14 +205,16 @@ fun DetailScreen(viewModel: MovieViewModel) {
                     Spacer(modifier = Modifier.height(12.dp))
 
                     val episode = viewModel.episodesList.firstOrNull()
-                    Button(onClick = {
-                        if (resume != null) viewModel.resumeHistory(resume)
-                        else if (episode != null && subject.isTvShow) viewModel.selectEpisode(episode)
-                        else viewModel.selectMovieDirect()
-                    }, modifier = Modifier.fillMaxWidth().testTag("play_movie_button")) {
-                        Icon(Icons.Filled.PlayArrow, null)
-                        Text(if (resume != null) "Resume · ${formatTime(resume.seeTime)}" else "Play")
-                    }
+                    LiquidGlassButton(
+                        text = if (resume != null) "Resume · ${formatTime(resume.seeTime)}" else "Play",
+                        icon = Icons.Filled.PlayArrow,
+                        onClick = {
+                            if (resume != null) viewModel.resumeHistory(resume)
+                            else if (episode != null && subject.isTvShow) viewModel.selectEpisode(episode)
+                            else viewModel.selectMovieDirect()
+                        },
+                        modifier = Modifier.fillMaxWidth().testTag("play_movie_button")
+                    )
                     if (last?.isTvShow == true) Text("Last watched · S${last.season} E${last.episode}", color = TextSecondary)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         IconButton(onClick = { viewModel.toggleFavorite(subject) }) {
@@ -221,10 +226,15 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             )
                         }
                         if (resume != null) TextButton(onClick = { viewModel.resumeHistory(resume, true) }) { Text("Start over") }
-                        TextButton(onClick = {
-                            if (subject.isTvShow && episode != null) viewModel.downloadSingleEpisode(context, subject, episode)
-                            else viewModel.downloadMovie(context, subject)
-                        }, enabled = !subject.isTvShow || episode != null) { Text(if (subject.isTvShow) "Download E${episode?.episodeNumber ?: 1}" else "Download") }
+                        LiquidGlassButton(
+                            text = if (subject.isTvShow) "Download E${episode?.episodeNumber ?: 1}" else "Download",
+                            icon = Icons.Filled.Download,
+                            enabled = !subject.isTvShow || episode != null,
+                            onClick = {
+                                if (subject.isTvShow && episode != null) viewModel.downloadSingleEpisode(context, subject, episode)
+                                else viewModel.downloadMovie(context, subject)
+                            }
+                        )
                     }
                     // Genres row
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -293,17 +303,10 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             modifier = Modifier.padding(bottom = 20.dp)
                         ) {
                             items(viewModel.seasonsList) { s ->
-                                FilterChip(
+                                LiquidFilterChip(
                                     selected = viewModel.selectedSeason == s,
                                     onClick = { viewModel.loadEpisodesForSeason(s) },
-                                    label = { Text("Season $s") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = CinematicRed,
-                                        selectedLabelColor = Color.White,
-                                        containerColor = ObsidianCard,
-                                        labelColor = TextSecondary
-                                    ),
-                                    border = null
+                                    label = "Season $s"
                                 )
                             }
                         }
@@ -322,11 +325,7 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             contentAlignment = Alignment.Center
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(28.dp),
-                                    color = CinematicRed,
-                                    strokeWidth = 2.dp
-                                )
+                                LiquidDots(dotSize = 8.dp)
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Text(
                                     text = "Loading episodes...",

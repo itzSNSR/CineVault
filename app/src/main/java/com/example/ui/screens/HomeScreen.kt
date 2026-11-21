@@ -42,6 +42,9 @@ import com.example.data.network.TmdbOttService
 import com.example.data.model.CategorySection
 import com.example.data.model.MovieSubject
 import com.example.ui.components.DashboardShimmerScreen
+import com.example.ui.components.LiquidDots
+import com.example.ui.components.LiquidFilterChip
+import com.example.ui.components.LiquidGlassButton
 import com.example.ui.components.MovieGridItem
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MovieViewModel
@@ -220,15 +223,11 @@ fun HomeScreen(viewModel: MovieViewModel) {
                                     )
                                     Spacer(modifier = Modifier.height(12.dp))
                                     Row {
-                                        Button(
+                                        LiquidGlassButton(
+                                            text = "Details & Play",
                                             onClick = { viewModel.selectSubject(heroMovie) },
-                                            colors = ButtonDefaults.buttonColors(containerColor = CinematicRed),
-                                            shape = RoundedCornerShape(20.dp)
-                                        ) {
-                                            Icon(Icons.Filled.PlayArrow, contentDescription = "Play")
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Details & Play", fontWeight = FontWeight.Bold)
-                                        }
+                                            icon = Icons.Filled.PlayArrow
+                                        )
                                     }
                                 }
                             }
@@ -270,17 +269,10 @@ fun HomeScreen(viewModel: MovieViewModel) {
                             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
                         ) {
                             items(categories) { cat ->
-                                FilterChip(
+                                LiquidFilterChip(
                                     selected = viewModel.selectedCategoryTab == cat.first,
                                     onClick = { viewModel.loadCategoryList(cat.first) },
-                                    label = { Text(cat.second) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = CinematicRed,
-                                        selectedLabelColor = Color.White,
-                                        containerColor = ObsidianCard,
-                                        labelColor = TextSecondary
-                                    ),
-                                    border = null
+                                    label = cat.second
                                 )
                             }
                         }
@@ -574,7 +566,7 @@ fun AllCatalogScreen(
                 contentAlignment = Alignment.TopCenter
             ) {
                 if (isLoadingCatalog) {
-                    CircularProgressIndicator(color = CinematicRed)
+                    LiquidDots()
                 } else {
                     Text("No movies found", color = TextSecondary, fontSize = 14.sp)
                 }

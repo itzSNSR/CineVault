@@ -4,8 +4,6 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -21,6 +19,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import coil.compose.AsyncImage
 import com.example.data.local.*
+import com.example.ui.components.LiquidNavItem
+import com.example.ui.components.LiquidNavigationBar
+import com.example.ui.components.liquidGlass
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MovieViewModel
 
@@ -36,23 +37,12 @@ private val destinations = listOf(
 fun CapsuleNavigation(active: String, restricted: Boolean, navigate: (String) -> Unit) {
     val tabs = if (restricted) destinations.filter { it.first == "download" } else destinations
     val selected = tabs.indexOfFirst { it.first == active || (it.first == "library" && active in listOf("settings", "history", "watchlist", "manage_categories")) }
-    BoxWithConstraints(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 10.dp, vertical = 6.dp)
-        .glass(40.dp, 5.dp).padding(4.dp)) {
-        val width = maxWidth / tabs.size
-        val left by animateDpAsState(width * selected.coerceAtLeast(0), label = "Selected tab")
-        Box(Modifier.offset(x = left).width(width).height(54.dp).clip(RoundedCornerShape(32.dp))
-            .background(CinematicRed.copy(alpha = .38f)))
-        Row(Modifier.fillMaxWidth().selectableGroup()) {
-            tabs.forEachIndexed { index, (id, label, icon) ->
-                val tint = if (index == selected) TextPrimary else TextSecondary
-                Column(Modifier.weight(1f).heightIn(min = 54.dp).selectable(index == selected, role = Role.Tab) { navigate(id) }
-                    .testTag("nav_$id"), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Icon(icon, null, tint = tint, modifier = Modifier.size(21.dp))
-                    Text(label, color = tint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-        }
-    }
+    val items = tabs.map { (id, label, icon) -> LiquidNavItem(id, label, icon) }
+    LiquidNavigationBar(
+        items = items,
+        selectedIndex = selected.coerceAtLeast(0),
+        onSelected = { index -> navigate(items[index].id) }
+    )
 }
 
 @Composable
@@ -64,7 +54,7 @@ fun ContinueWatching(vm: MovieViewModel) {
         Text("Continue Watching", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 16.dp))
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(GlassSpacing)) {
             items(entries, key = { it.id }) { entry ->
-                Column(Modifier.width(180.dp).glass().clickable { vm.resumeHistory(entry) }) {
+                Column(Modifier.width(180.dp).liquidGlass(radius = 16.dp, alpha = 0.42f).clickable { vm.resumeHistory(entry) }) {
                     AsyncImage(entry.poster, null, Modifier.fillMaxWidth().height(92.dp), contentScale = ContentScale.Crop)
                     Column(Modifier.padding(10.dp)) {
                         Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis)

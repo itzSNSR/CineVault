@@ -57,6 +57,11 @@ import com.example.data.model.Episode
 import com.example.data.model.MovieSubject
 import com.example.data.model.StreamItem
 import com.example.data.model.SubtitleItem
+import com.example.ui.components.BufferingMorphIndicator
+import com.example.ui.components.CineVaultMorphLoader
+import com.example.ui.components.CineVaultWordmark
+import com.example.ui.components.LiquidDots
+import com.example.ui.components.liquidGlass
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MovieViewModel
 import com.example.util.SubtitlePreference
@@ -367,12 +372,8 @@ fun SplashScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Smooth sleek loading bar
-            CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                color = CinematicRed,
-                strokeWidth = 2.dp
-            )
+            // Brand mark physically settles into a Play mark while startup resolves.
+            CineVaultMorphLoader(size = 62.dp)
         }
     }
 }
@@ -1141,6 +1142,18 @@ fun MainContent(viewModel: MovieViewModel) {
                     .fillMaxSize()
                     .padding(if (viewModel.isLiveTvPlaying) PaddingValues(0.dp) else innerPadding)
             ) {
+                Column(Modifier.fillMaxSize()) {
+                    if (activeTab == "home" && viewModel.selectedSubject == null && viewModel.playInfo == null) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CineVaultWordmark(fontSize = 27.sp)
+                        }
+                    }
+                    Box(Modifier.fillMaxWidth().weight(1f)) {
                 holder.SaveableStateProvider(activeTab) {
                     when (activeTab) {
                         "home" -> HomeScreen(viewModel)
@@ -1174,16 +1187,16 @@ fun MainContent(viewModel: MovieViewModel) {
                             viewModel,
                             onBack = { back() }
                         )
-                        "history" -> HistoryScreen(
+                                                "history" -> HistoryScreen(
                             viewModel,
                             onBack = { back() }
                         )
                     }
                 }
+                    }
+                }
             }
         }
-
-
 
         // Detail screen slide-up overlay
         AnimatedVisibility(
@@ -1245,7 +1258,7 @@ fun MainContent(viewModel: MovieViewModel) {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        CircularProgressIndicator(color = CinematicRed)
+                        CineVaultMorphLoader(size = 64.dp)
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             text = "Fetching stream links...",
@@ -1646,16 +1659,16 @@ fun SearchScreen(viewModel: MovieViewModel, initialQuery: String = "") {
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = TextPrimary,
                 unfocusedTextColor = TextPrimary,
-                focusedContainerColor = ObsidianCard,
-                unfocusedContainerColor = ObsidianCard,
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
                 focusedBorderColor = CinematicRed,
                 unfocusedBorderColor = Color.Transparent
             ),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(28.dp),
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
-                .glass(22.dp)
+                .liquidGlass(28.dp, tint = ObsidianCard, alpha = 0.30f)
                 .testTag("search_text_input")
         )
 
@@ -1671,7 +1684,7 @@ fun SearchScreen(viewModel: MovieViewModel, initialQuery: String = "") {
 
         if (viewModel.isSearching) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = CinematicRed)
+                LiquidDots(dotSize = 8.dp)
             }
         } else if (!isSearchSubmitted || searchInput.isEmpty()) {
             LazyColumn(
@@ -1815,11 +1828,7 @@ fun SearchScreen(viewModel: MovieViewModel, initialQuery: String = "") {
                                 .padding(16.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                color = CinematicRed,
-                                strokeWidth = 2.dp
-                            )
+                            LiquidDots(dotSize = 6.dp)
                         }
                     }
                 }
@@ -2584,6 +2593,21 @@ fun PlayerScreen(viewModel: MovieViewModel) {
     val isFullscreen = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val playerHeight = minOf(screenWidth * (9f / 16f), screenHeight * 0.32f)
     var isControllerVisible by remember { mutableStateOf(true) }
+    var seekLocked by rememberSaveable { mutableStateOf(false) }
+    var gestureHud by remember { mutableStateOf<PlayerGestureHud?>(null) }
+
+    // Restore the original Activity brightness when the player leaves.
+    DisposableEffect(context) {
+        val activity = context as? android.app.Activity
+        val originalBrightness = activity?.window?.attributes?.screenBrightness
+        onDispose {
+            activity?.window?.let { window ->
+                val attributes = window.attributes
+                attributes.screenBrightness = originalBrightness ?: -1f
+                window.attributes = attributes
+            }
+        }
+    }
 
     // Double-tap Gesture Indicator States
     var doubleTapActionText by remember { mutableStateOf<String?>(null) }
@@ -3267,6 +3291,19 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
+                        .playerDragGestures(
+                            player = exoPlayer,
+                            seekEnabled = !seekLocked,
+                            onHud = { gestureHud = it },
+                            onSeekCommit = { target ->
+                                currentProgressMs = target
+                                exoPlayer.seekTo(target)
+                                if (viewModel.isAniFam && viewModel.activeW2GRoom != null && viewModel.isHostingW2G) {
+                                    val posSec = (target / 1000).toInt().coerceAtLeast(0)
+                                    viewModel.syncW2GPlayback("seek", posSec)
+                                }
+                            }
+                        )
                         .pointerInput(Unit) {
                             playbackGestures(exoPlayer,
                                 onTap = {
@@ -3283,7 +3320,11 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                         viewModel.isGuestWatchingOnOwn = true
                                     }
 
-                                    when {
+                                    if (seekLocked && (x < leftBoundary || x > rightBoundary)) {
+                                        doubleTapActionSide = if (x < leftBoundary) "left" else "right"
+                                        doubleTapActionText = "LOCKED"
+                                        gestureAnimTrigger = System.currentTimeMillis()
+                                    } else when {
                                         x < leftBoundary -> {
                                             // Left side: rewind 10 seconds (matches AniFam official player)
                                             val current = exoPlayer.currentPosition
@@ -3568,16 +3609,6 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                             }
                         }
 
-                        // Center Buffering Spinner (if loading)
-                        if (isBuffering) {
-                            CircularProgressIndicator(
-                                color = CinematicRed,
-                                modifier = Modifier
-                                    .align(Alignment.Center)
-                                    .size(48.dp)
-                            )
-                        }
-
                         // Bottom Controls: Floating Seek Preview + Controls Row
                         Column(
                             modifier = Modifier
@@ -3682,7 +3713,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                         seekPositionMs = ms
                                         seekFraction = frac
                                     },
-                                    enabled = true,
+                                    enabled = !seekLocked,
                                     modifier = Modifier
                                         .weight(1f)
                                         .padding(horizontal = 8.dp)
@@ -3754,6 +3785,32 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                 }
             }
 
+                if (!isInPip) {
+                    SeekLockButton(
+                        locked = seekLocked,
+                        onToggle = {
+                            seekLocked = !seekLocked
+                            gestureHud = null
+                        },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .statusBarsPadding()
+                            .padding(top = 56.dp, end = 10.dp)
+                    )
+                }
+
+                PlayerGestureHud(
+                    hud = gestureHud,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+
+                // Buffering stays visible even after the controller auto-hides.
+                if (isBuffering && !isInPip) {
+                    BufferingMorphIndicator(
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+
                 // Transparent click catcher overlay on player view when bottom sheet is active
                 if (activeSheet != null) {
                     Box(
@@ -3767,7 +3824,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = CinematicRed)
+                    CineVaultMorphLoader(size = 56.dp)
                 }
             }
         }
@@ -5332,7 +5389,7 @@ fun DownloadScreen(viewModel: MovieViewModel) {
     ) {
         if (!isScanLoaded && downloadedFiles.isEmpty() && activeDownloads.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = CinematicRed, modifier = Modifier.size(36.dp))
+                LiquidDots(dotSize = 8.dp)
             }
         } else if (downloadedFiles.isEmpty() && activeDownloads.isEmpty()) {
             Column(
@@ -6398,6 +6455,8 @@ fun OfflinePlayerScreen(
     var offlineDurationMs by remember { mutableStateOf(0L) }
     var isOfflineBuffering by remember { mutableStateOf(false) }
     var isOfflineSeeking by remember { mutableStateOf(false) }
+    var offlineSeekLocked by rememberSaveable { mutableStateOf(false) }
+    var offlineGestureHud by remember { mutableStateOf<PlayerGestureHud?>(null) }
     var offlineSeekPositionMs by remember { mutableStateOf(0L) }
     var offlineSeekFraction by remember { mutableStateOf(0f) }
     var lastOfflineSeekFinishedTime by remember { mutableStateOf(0L) }
@@ -6422,6 +6481,17 @@ fun OfflinePlayerScreen(
     val isOfflineFullscreen = offlineConfiguration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val offlineActivity = context as? android.app.Activity
     val isOfflineInPip = offlineActivity?.isInPictureInPictureMode ?: false
+
+    DisposableEffect(offlineActivity) {
+        val originalBrightness = offlineActivity?.window?.attributes?.screenBrightness
+        onDispose {
+            offlineActivity?.window?.let { window ->
+                val attributes = window.attributes
+                attributes.screenBrightness = originalBrightness ?: -1f
+                window.attributes = attributes
+            }
+        }
+    }
 
     BackHandler {
         if (activeOfflineSheet != null) {
@@ -6579,6 +6649,15 @@ fun OfflinePlayerScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .playerDragGestures(
+                    player = exoPlayer,
+                    seekEnabled = !offlineSeekLocked,
+                    onHud = { offlineGestureHud = it },
+                    onSeekCommit = { target ->
+                        currentOfflineProgressMs = target
+                        exoPlayer.seekTo(target)
+                    }
+                )
                 .pointerInput(Unit) {
                     playbackGestures(exoPlayer,
                         onTap = {
@@ -6590,7 +6669,11 @@ fun OfflinePlayerScreen(
                             val leftBoundary = width * 0.35f
                             val rightBoundary = width * 0.65f
 
-                            when {
+                            if (offlineSeekLocked && (x < leftBoundary || x > rightBoundary)) {
+                                offlineDoubleTapSide = if (x < leftBoundary) "left" else "right"
+                                offlineDoubleTapText = "LOCKED"
+                                offlineGestureTrigger = System.currentTimeMillis()
+                            } else when {
                                 x < leftBoundary -> {
                                     // Left: rewind 10s
                                     val current = exoPlayer.currentPosition
@@ -6754,14 +6837,6 @@ fun OfflinePlayerScreen(
                     }
                 }
 
-                // Center Buffering Spinner
-                if (isOfflineBuffering) {
-                    CircularProgressIndicator(
-                        color = CinematicRed,
-                        modifier = Modifier.align(Alignment.Center).size(48.dp)
-                    )
-                }
-
                 // Bottom Controls: Floating Seek Preview + Controls Row
                 Column(
                     modifier = Modifier
@@ -6848,7 +6923,7 @@ fun OfflinePlayerScreen(
                                 offlineSeekPositionMs = ms
                                 offlineSeekFraction = frac
                             },
-                            enabled = true,
+                            enabled = !offlineSeekLocked,
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(horizontal = 8.dp)
@@ -6907,6 +6982,28 @@ fun OfflinePlayerScreen(
                     }
                 }
             }
+        }
+
+        // Seek Lock remains reachable while the offline controller is hidden.
+        if (!isOfflineInPip) {
+            SeekLockButton(
+                locked = offlineSeekLocked,
+                onToggle = {
+                    offlineSeekLocked = !offlineSeekLocked
+                    offlineGestureHud = null
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = 56.dp, end = 10.dp)
+            )
+        }
+        PlayerGestureHud(
+            hud = offlineGestureHud,
+            modifier = Modifier.align(Alignment.Center)
+        )
+        if (isOfflineBuffering) {
+            BufferingMorphIndicator(modifier = Modifier.align(Alignment.Center))
         }
 
         // Offline Playback Settings Sheet (Subtitles & Playback Speed only)
