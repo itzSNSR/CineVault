@@ -1,0 +1,22 @@
+{
+  "name": "CineVault Android",
+  "image": "mcr.microsoft.com/devcontainers/java:1-17-bookworm",
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb"
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "remoteEnv": {
+    "ANDROID_HOME": "${containerEnv:HOME}/android-sdk",
+    "ANDROID_SDK_ROOT": "${containerEnv:HOME}/android-sdk",
+    "PATH": "${containerEnv:PATH}:${containerEnv:HOME}/android-sdk/platform-tools:${containerEnv:HOME}/android-sdk/cmdline-tools/latest/bin"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "fwcd.kotlin",
+        "vscjava.vscode-gradle"
+      ]
+    }
+  }
+}

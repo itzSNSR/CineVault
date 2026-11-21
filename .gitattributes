@@ -1,2 +1,6 @@
 # Exclude Python server from GitHub language statistics
 *.py linguist-vendored
+
+# Keep shell scripts LF so they run in the Linux dev container
+*.sh text eol=lf
+gradlew text eol=lf
