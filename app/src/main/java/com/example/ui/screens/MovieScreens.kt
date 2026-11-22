@@ -3304,7 +3304,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                 }
                             }
                         )
-                        .pointerInput(Unit) {
+                        .pointerInput(seekLocked) {
                             playbackGestures(exoPlayer,
                                 onTap = {
                                     isControllerVisible = !isControllerVisible
@@ -3786,17 +3786,23 @@ fun PlayerScreen(viewModel: MovieViewModel) {
             }
 
                 if (!isInPip) {
-                    SeekLockButton(
-                        locked = seekLocked,
-                        onToggle = {
-                            seekLocked = !seekLocked
-                            gestureHud = null
-                        },
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isControllerVisible,
+                        enter = fadeIn(tween(180)),
+                        exit = fadeOut(tween(180)),
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .statusBarsPadding()
                             .padding(top = 56.dp, end = 10.dp)
-                    )
+                    ) {
+                        SeekLockButton(
+                            locked = seekLocked,
+                            onToggle = {
+                                seekLocked = !seekLocked
+                                gestureHud = null
+                            }
+                        )
+                    }
                 }
 
                 PlayerGestureHud(
@@ -6658,7 +6664,7 @@ fun OfflinePlayerScreen(
                         exoPlayer.seekTo(target)
                     }
                 )
-                .pointerInput(Unit) {
+                .pointerInput(offlineSeekLocked) {
                     playbackGestures(exoPlayer,
                         onTap = {
                             isOfflineControllerVisible = !isOfflineControllerVisible
@@ -6984,19 +6990,24 @@ fun OfflinePlayerScreen(
             }
         }
 
-        // Seek Lock remains reachable while the offline controller is hidden.
         if (!isOfflineInPip) {
-            SeekLockButton(
-                locked = offlineSeekLocked,
-                onToggle = {
-                    offlineSeekLocked = !offlineSeekLocked
-                    offlineGestureHud = null
-                },
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isOfflineControllerVisible,
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(180)),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .statusBarsPadding()
                     .padding(top = 56.dp, end = 10.dp)
-            )
+            ) {
+                SeekLockButton(
+                    locked = offlineSeekLocked,
+                    onToggle = {
+                        offlineSeekLocked = !offlineSeekLocked
+                        offlineGestureHud = null
+                    }
+                )
+            }
         }
         PlayerGestureHud(
             hud = offlineGestureHud,

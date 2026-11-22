@@ -18,8 +18,8 @@ android {
     applicationId = "app.cinevault.classic"
     minSdk = 24
     targetSdk = 36
-    versionCode = 12
-    versionName = "4.7"
+    versionCode = 13
+    versionName = "4.7.1"
   }
 
   val keystorePropertiesFile = rootProject.file("key.properties")

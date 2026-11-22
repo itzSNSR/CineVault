@@ -40,6 +40,15 @@ Enable Pages in the repository settings to serve it at
 
 ---
 
+## What's new in 4.7.1
+
+- Seek Lock hides with the playback controls and reappears when the controls are revealed
+- Existing online and offline player gestures and playback behavior remain unchanged
+- No provider, subtitle, or application data changes
+- Update downloads are verified for package, version, and signing compatibility before installation
+
+---
+
 ## What's new in 4.7
 
 - **Midnight Amethyst liquid glass** — native translucent glass surfaces across Home, Search, Details, Library and Live TV
