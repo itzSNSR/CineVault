@@ -539,6 +539,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     var isDownloadingUpdate by mutableStateOf(false)
     var updateDownloadProgress by mutableStateOf(0)
     var updateStatusMessage by mutableStateOf("")
+    private var validatedUpdateApk: java.io.File? = null
 
     init {
         viewModelScope.launch(Dispatchers.IO) { com.example.data.download.DownloadQueue.restore(application) }
@@ -581,9 +582,10 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                             .header("Cache-Control", "no-cache")
                             .build()
 
-                        val response = client.newCall(request).execute()
-                        if (response.isSuccessful) {
-                            bodyString = response.body?.string()
+                        client.newCall(request).execute().use { response ->
+                            if (response.isSuccessful) {
+                                bodyString = response.body?.string()
+                            }
                             if (!bodyString.isNullOrBlank()) break
                         }
                     } catch (_: Exception) {
@@ -609,7 +611,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                         getApplication<Application>().packageManager.getPackageInfo(getApplication<Application>().packageName, 0).versionName ?: "2.0"
                     } catch (e: Exception) { "2.0" }
 
-                    val hasNewerVersion = (remoteVersionCode > currentVersionCode) || isVersionGreater(remoteVersionName, currentVersionName)
+                    val hasNewerVersion = remoteVersionCode > currentVersionCode
 
                     if (hasNewerVersion && downloadUrl.isNotEmpty()) {
                         val prefsManager = android.preference.PreferenceManager.getDefaultSharedPreferences(getApplication<Application>())
@@ -676,15 +678,48 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     fun downloadAndInstallUpdate(context: android.content.Context, downloadUrl: String) {
         if (isDownloadingUpdate) return
+
+        val offeredVersionCode = availableUpdateInfo?.latestVersionCode?.toLong()
+        val cachedApk = validatedUpdateApk
+        if (cachedApk != null && cachedApk.exists()) {
+            val validationError = if (offeredVersionCode != null) {
+                validateUpdateApk(context, cachedApk, offeredVersionCode)
+            } else {
+                "Update version information is unavailable"
+            }
+            if (validationError == null) {
+                installApk(context, cachedApk)
+                return
+            }
+        }
+        if (offeredVersionCode == null) {
+            Toast.makeText(context, "Update version information is unavailable.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val parsedUrl = try {
+            java.net.URI(downloadUrl)
+        } catch (_: Exception) {
+            Toast.makeText(context, "Update URL is invalid.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (parsedUrl.scheme?.lowercase() != "https" || parsedUrl.host.isNullOrBlank()) {
+            Toast.makeText(context, "Update URL must use HTTPS.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         isDownloadingUpdate = true
         updateDownloadProgress = 0
         updateStatusMessage = "Connecting..."
 
         viewModelScope.launch(Dispatchers.IO) {
+            var response: okhttp3.Response? = null
             try {
                 val client = okhttp3.OkHttpClient.Builder()
                     .followRedirects(true)
                     .followSslRedirects(true)
+                    .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
 
                 val request = okhttp3.Request.Builder()
@@ -692,7 +727,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     .header("User-Agent", "CineVaultApp")
                     .build()
 
-                val response = client.newCall(request).execute()
+                response = client.newCall(request).execute()
                 if (!response.isSuccessful) {
                     withContext(Dispatchers.Main) {
                         isDownloadingUpdate = false
@@ -704,31 +739,47 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 val body = response.body ?: throw Exception("Empty response body")
                 val contentLength = body.contentLength()
                 val cacheDir = context.externalCacheDir ?: context.cacheDir
+                val partialFile = java.io.File(cacheDir, "update.apk.partial")
                 val apkFile = java.io.File(cacheDir, "update.apk")
-                if (apkFile.exists()) apkFile.delete()
+                partialFile.delete()
+                apkFile.delete()
 
-                val inputStream = body.byteStream()
-                val outputStream = java.io.FileOutputStream(apkFile)
                 val buffer = ByteArray(8 * 1024)
                 var bytesRead: Int
                 var totalBytesRead: Long = 0
-
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    outputStream.write(buffer, 0, bytesRead)
-                    totalBytesRead += bytesRead
-                    if (contentLength > 0) {
-                        val progress = ((totalBytesRead * 100) / contentLength).toInt()
-                        withContext(Dispatchers.Main) {
-                            updateDownloadProgress = progress
-                            updateStatusMessage = "$progress%"
+                body.byteStream().use { inputStream ->
+                    java.io.FileOutputStream(partialFile).use { outputStream ->
+                        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                            outputStream.write(buffer, 0, bytesRead)
+                            totalBytesRead += bytesRead
+                            if (contentLength > 0) {
+                                val progress = ((totalBytesRead * 100) / contentLength).coerceIn(0, 100).toInt()
+                                withContext(Dispatchers.Main) {
+                                    updateDownloadProgress = progress
+                                    updateStatusMessage = "$progress%"
+                                }
+                            }
                         }
+                        outputStream.fd.sync()
                     }
                 }
-                outputStream.flush()
-                outputStream.close()
-                inputStream.close()
+
+                if (totalBytesRead == 0L) throw java.io.IOException("Downloaded APK is empty")
+                if (contentLength >= 0L && totalBytesRead != contentLength) {
+                    throw java.io.IOException("Incomplete APK download")
+                }
+                if (!partialFile.renameTo(apkFile)) {
+                    throw java.io.IOException("Could not prepare downloaded APK")
+                }
+
+                val validationError = validateUpdateApk(context, apkFile, offeredVersionCode)
+                if (validationError != null) {
+                    apkFile.delete()
+                    throw java.io.IOException(validationError)
+                }
 
                 withContext(Dispatchers.Main) {
+                    validatedUpdateApk = apkFile
                     isDownloadingUpdate = false
                     updateStatusMessage = "Ready to install"
                     installApk(context, apkFile)
@@ -736,10 +787,103 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     isDownloadingUpdate = false
-                    Toast.makeText(context, "Update download failed. Check your internet connection.", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Update download failed: ${e.message ?: "Check your internet connection."}", Toast.LENGTH_LONG).show()
                 }
+            } finally {
+                response?.close()
             }
         }
+    }
+
+    private fun validateUpdateApk(
+        context: android.content.Context,
+        apkFile: java.io.File,
+        offeredVersionCode: Long
+    ): String? {
+        if (!apkFile.isFile || apkFile.length() <= 0L) return "Downloaded APK is empty"
+
+        val pm = context.packageManager
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            @Suppress("DEPRECATION")
+            android.content.pm.PackageManager.GET_SIGNATURES
+        }
+        val archiveInfo = try {
+            pm.getPackageArchiveInfo(apkFile.absolutePath, flags)
+        } catch (_: Exception) {
+            null
+        } ?: return "Downloaded file is not a valid APK"
+
+        if (archiveInfo.packageName != "app.cinevault.classic") {
+            return "APK package name does not match CineVault"
+        }
+        val downloadedVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            archiveInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            archiveInfo.versionCode.toLong()
+        }
+        if (downloadedVersionCode != offeredVersionCode) {
+            return "APK versionCode is $downloadedVersionCode, expected $offeredVersionCode"
+        }
+
+        val archiveSigningInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            archiveInfo.signingInfo
+        } else {
+            null
+        }
+        val archiveCerts = signingCertificateDigests(archiveSigningInfo, archiveInfo)
+        if (archiveCerts.isEmpty()) return "Unable to verify APK signing certificate"
+        val installedInfo = try {
+            pm.getPackageInfo(context.packageName, flags)
+        } catch (_: Exception) {
+            null
+        } ?: return "Unable to verify the installed CineVault signing identity"
+        val installedVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            installedInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            installedInfo.versionCode.toLong()
+        }
+        if (offeredVersionCode <= installedVersionCode) {
+            return "Offered APK versionCode $offeredVersionCode is not newer than installed versionCode $installedVersionCode"
+        }
+        val installedSigningInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            installedInfo.signingInfo
+        } else {
+            null
+        }
+        val installedCerts = signingCertificateDigests(installedSigningInfo, installedInfo)
+        if (installedCerts.isEmpty() || archiveCerts.none { it in installedCerts }) {
+            return "APK signing identity does not match the installed CineVault app"
+        }
+        return null
+    }
+
+    private fun signingCertificateDigests(
+        signingInfo: android.content.pm.SigningInfo?,
+        packageInfo: android.content.pm.PackageInfo
+    ): Set<String> {
+        val digests = mutableSetOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && signingInfo != null) {
+            val signatures = if (signingInfo.hasMultipleSigners()) signingInfo.apkContentsSigners else signingInfo.signingCertificateHistory
+            signatures.forEach { signature ->
+                digestCertificate(signature.toByteArray())?.let(digests::add)
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.signatures?.forEach { signature ->
+                digestCertificate(signature.toByteArray())?.let(digests::add)
+            }
+        }
+        return digests
+    }
+
+    private fun digestCertificate(bytes: ByteArray): String? = try {
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02X".format(it) }
+    } catch (_: Exception) {
+        null
     }
 
     private fun installApk(context: android.content.Context, apkFile: java.io.File) {
