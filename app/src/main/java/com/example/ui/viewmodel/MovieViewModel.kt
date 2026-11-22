@@ -815,14 +815,24 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             return "APK versionCode is $downloadedVersionCode, expected 13"
         }
 
-        val archiveCerts = signingCertificateDigests(archiveInfo.signingInfo, archiveInfo, pm, flags)
+        val archiveSigningInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            archiveInfo.signingInfo
+        } else {
+            null
+        }
+        val archiveCerts = signingCertificateDigests(archiveSigningInfo, archiveInfo)
         if (archiveCerts.isEmpty()) return "Unable to verify APK signing certificate"
         val installedInfo = try {
             pm.getPackageInfo(context.packageName, flags)
         } catch (_: Exception) {
             null
         } ?: return "Unable to verify the installed CineVault signing identity"
-        val installedCerts = signingCertificateDigests(installedInfo.signingInfo, installedInfo, pm, flags)
+        val installedSigningInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            installedInfo.signingInfo
+        } else {
+            null
+        }
+        val installedCerts = signingCertificateDigests(installedSigningInfo, installedInfo)
         if (installedCerts.isEmpty() || archiveCerts.none { it in installedCerts }) {
             return "APK signing identity does not match the installed CineVault app"
         }
@@ -831,9 +841,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun signingCertificateDigests(
         signingInfo: android.content.pm.SigningInfo?,
-        packageInfo: android.content.pm.PackageInfo,
-        pm: android.content.pm.PackageManager,
-        flags: Int
+        packageInfo: android.content.pm.PackageInfo
     ): Set<String> {
         val digests = mutableSetOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && signingInfo != null) {
