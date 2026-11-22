@@ -1,7 +1,7 @@
 {
-  "versionName": "4.7",
-  "versionCode": 12,
+  "versionName": "4.7.1",
+  "versionCode": 13,
   "forceUpdate": false,
-  "changelog": "• CineVault 4.7 by SNSR\n• Midnight Amethyst liquid-glass surfaces across Home, Search, Details and Live TV\n• Stable CineVault wordmark and draggable liquid bottom navigation with spring motion\n• Branded CineVault-to-Play loading and compact buffering animation\n• Player brightness, media-volume and horizontal seek gestures with glass HUDs\n• Seek Lock for online and offline playback, with existing gestures preserved\n• Android 7+ compatibility and existing provider playback preserved",
-  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.7/CineVault.apk"
+  "changelog": "• CineVault 4.7.1 by SNSR\n• Seek Lock now fades with online and offline playback controls\n• Lock state remains effective while controls are hidden\n• Existing player gestures, providers, subtitles and user data remain unchanged\n• Update downloads are validated for package, version and signing compatibility",
+  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.7.1/CineVault.apk"
 }
