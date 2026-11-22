@@ -679,13 +679,22 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     fun downloadAndInstallUpdate(context: android.content.Context, downloadUrl: String) {
         if (isDownloadingUpdate) return
 
+        val offeredVersionCode = availableUpdateInfo?.latestVersionCode?.toLong()
         val cachedApk = validatedUpdateApk
         if (cachedApk != null && cachedApk.exists()) {
-            val validationError = validateUpdateApk(context, cachedApk)
+            val validationError = if (offeredVersionCode != null) {
+                validateUpdateApk(context, cachedApk, offeredVersionCode)
+            } else {
+                "Update version information is unavailable"
+            }
             if (validationError == null) {
                 installApk(context, cachedApk)
                 return
             }
+        }
+        if (offeredVersionCode == null) {
+            Toast.makeText(context, "Update version information is unavailable.", Toast.LENGTH_SHORT).show()
+            return
         }
 
         val parsedUrl = try {
@@ -763,7 +772,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     throw java.io.IOException("Could not prepare downloaded APK")
                 }
 
-                val validationError = validateUpdateApk(context, apkFile)
+                val validationError = validateUpdateApk(context, apkFile, offeredVersionCode)
                 if (validationError != null) {
                     apkFile.delete()
                     throw java.io.IOException(validationError)
@@ -786,7 +795,11 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun validateUpdateApk(context: android.content.Context, apkFile: java.io.File): String? {
+    private fun validateUpdateApk(
+        context: android.content.Context,
+        apkFile: java.io.File,
+        offeredVersionCode: Long
+    ): String? {
         if (!apkFile.isFile || apkFile.length() <= 0L) return "Downloaded APK is empty"
 
         val pm = context.packageManager
@@ -811,8 +824,8 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             @Suppress("DEPRECATION")
             archiveInfo.versionCode.toLong()
         }
-        if (downloadedVersionCode != 13L) {
-            return "APK versionCode is $downloadedVersionCode, expected 13"
+        if (downloadedVersionCode != offeredVersionCode) {
+            return "APK versionCode is $downloadedVersionCode, expected $offeredVersionCode"
         }
 
         val archiveSigningInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -827,6 +840,15 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         } catch (_: Exception) {
             null
         } ?: return "Unable to verify the installed CineVault signing identity"
+        val installedVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            installedInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            installedInfo.versionCode.toLong()
+        }
+        if (offeredVersionCode <= installedVersionCode) {
+            return "Offered APK versionCode $offeredVersionCode is not newer than installed versionCode $installedVersionCode"
+        }
         val installedSigningInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             installedInfo.signingInfo
         } else {
