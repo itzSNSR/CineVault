@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.MovieSubject
+import com.example.ui.components.CineVaultMorphLoader
 import com.example.ui.theme.AccentAmber
 import com.example.ui.theme.ObsidianDark
 import com.example.ui.theme.TextPrimary
@@ -74,6 +75,17 @@ fun DashboardShimmerScreen() {
             .fillMaxSize()
             .background(ObsidianDark)
     ) {
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(122.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CineVaultMorphLoader(size = 76.dp)
+            }
+        }
+
         // Shimmer Hero Banner Placeholder
         item {
             Box(

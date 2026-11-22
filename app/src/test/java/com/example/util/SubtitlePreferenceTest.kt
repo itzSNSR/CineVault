@@ -1,71 +1,155 @@
 package com.example.util
 
 import com.example.data.model.SubtitleItem
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SubtitlePreferenceTest {
-    private val firstEpisode = SubtitleItem("English", "https://example.com/s1e1.vtt")
-    private val nextEpisode = SubtitleItem("English (CC)", "https://example.com/s1e2.vtt")
 
-    @Test fun rebindingEnglishNeverReusesPreviousEpisodeSubtitle() {
+    private val s1e1English = SubtitleItem("English", "https://cdn.example/s1e1-en.vtt")
+    private val s1e2English = SubtitleItem("English (CC)", "https://cdn.example/s1e2-en.vtt")
+    private val s1e2Tamil = SubtitleItem("Tamil", "https://cdn.example/s1e2-ta.vtt")
+    private val s1e2French = SubtitleItem("French", "https://cdn.example/s1e2-fr.vtt")
+
+    @Test
+    fun nextEpisodeIsReboundAndPreviousUrlIsNeverReused() {
         val selected = SubtitlePreference.forEpisode(
-            listOf(SubtitleItem("Spanish", "https://example.com/es-s1e2.vtt"), nextEpisode),
-            firstEpisode.language,
-            subtitlesOff = false,
-            embeddedLanguage = null
+            available = listOf(s1e2Tamil, s1e2English),
+            preferredLanguage = s1e1English.language,
+            subtitlesOff = false
         )
-        assertEquals(nextEpisode.url, selected?.url)
-        assertNotEquals(firstEpisode.url, selected?.url)
+        assertEquals(s1e2English.url, selected?.url)
+        assertNotEquals(s1e1English.url, selected?.url)
     }
 
-    @Test fun defaultsToEnglishEvenWhenItIsNotTheFirstTrack() {
-        val available = listOf(
-            SubtitleItem("Bengali", "https://example.com/bn.srt"),
-            SubtitleItem("EN", "https://example.com/en.srt")
+    @Test
+    fun englishIsDefaultWhenItIsNotTheFirstTrack() {
+        val selected = SubtitlePreference.forEpisode(
+            available = listOf(
+                SubtitleItem("Bengali", "https://cdn.example/bn.srt"),
+                SubtitleItem("EN", "https://cdn.example/en.srt")
+            ),
+            preferredLanguage = null,
+            subtitlesOff = false
         )
-        assertEquals("https://example.com/en.srt",
-            SubtitlePreference.forEpisode(available, null, false, null)?.url)
+        assertEquals("https://cdn.example/en.srt", selected?.url)
     }
 
-    @Test fun missingPreferredLanguageFallsBackToEnglish() {
-        val available = listOf(
-            SubtitleItem("French", "https://example.com/fr.vtt"),
-            SubtitleItem("eng", "https://example.com/en.vtt")
+    @Test
+    fun englishMatchesAllProviderSpellings() {
+        val labels = listOf("English", "EN", "en", "eng", "English (CC)", "English (OpenSubtitles)")
+        for (label in labels) {
+            val selected = SubtitlePreference.forEpisode(
+                available = listOf(SubtitleItem(label, "https://cdn.example/$label.vtt")),
+                preferredLanguage = null,
+                subtitlesOff = false
+            )
+            assertEquals(label, selected?.language)
+        }
+    }
+
+    @Test
+    fun manualLanguageIsKeptWhenTheNextEpisodeHasIt() {
+        val selected = SubtitlePreference.forEpisode(
+            available = listOf(s1e2English, s1e2Tamil),
+            preferredLanguage = "Tamil",
+            subtitlesOff = false
         )
-        assertEquals("eng",
-            SubtitlePreference.forEpisode(available, "Spanish", false, null)?.language)
+        assertEquals(s1e2Tamil.url, selected?.url)
     }
 
-    @Test fun keepsNonEnglishPreferenceWhenPresent() {
-        val available = listOf(
-            SubtitleItem("English", "https://example.com/en.vtt"),
-            SubtitleItem("French", "https://example.com/fr.vtt")
+    @Test
+    fun missingPreferredLanguageFallsBackToEnglish() {
+        val selected = SubtitlePreference.forEpisode(
+            available = listOf(s1e2French, SubtitleItem("eng", "https://cdn.example/s1e2-en.srt")),
+            preferredLanguage = "ta",
+            subtitlesOff = false
         )
-        assertEquals("French",
-            SubtitlePreference.forEpisode(available, "fr", false, null)?.language)
+        assertEquals("https://cdn.example/s1e2-en.srt", selected?.url)
     }
 
-    @Test fun offAndEmbeddedSelectionsAreRespected() {
-        assertNull(SubtitlePreference.forEpisode(listOf(nextEpisode), "English", true, null))
-        assertNull(SubtitlePreference.forEpisode(listOf(nextEpisode), "English", false, "ja"))
-    }
-
-    @Test fun returnsOnlyValidEpisodeLinks() {
-        val available = listOf(
-            SubtitleItem("English", ""),
-            SubtitleItem("Tamil", "https://example.com/ta.vtt")
+    @Test
+    fun anotherValidTrackIsUsedOnlyWhenEnglishIsMissing() {
+        val selected = SubtitlePreference.forEpisode(
+            available = listOf(s1e2French),
+            preferredLanguage = "ta",
+            subtitlesOff = false
         )
-        assertEquals("Tamil",
-            SubtitlePreference.forEpisode(available, null, false, null)?.language)
-        assertNull(SubtitlePreference.forEpisode(emptyList(), "English", false, null))
+        assertEquals(s1e2French.url, selected?.url)
     }
 
-    @Test fun normalizesDisplayNamesToMedia3LanguageTags() {
+    @Test
+    fun explicitOffWinsOverEveryPreference() {
+        assertNull(
+            SubtitlePreference.forEpisode(listOf(s1e2English), "English", subtitlesOff = true)
+        )
+    }
+
+    @Test
+    fun embeddedTrackSelectionWinsOverExternalCaptions() {
+        assertNull(
+            SubtitlePreference.forEpisode(
+                listOf(s1e2English),
+                "English",
+                subtitlesOff = false,
+                embeddedLanguage = "ja"
+            )
+        )
+    }
+
+    @Test
+    fun noUsableSubtitleMeansNoSelection() {
+        assertNull(SubtitlePreference.forEpisode(emptyList(), null, subtitlesOff = false))
+        assertNull(
+            SubtitlePreference.forEpisode(
+                listOf(SubtitleItem("English", ""), SubtitleItem("Tamil", "   ")),
+                null,
+                subtitlesOff = false
+            )
+        )
+    }
+
+    @Test
+    fun dubbedAudioKeepsAutomaticSelectionOff() {
+        assertNull(
+            SubtitlePreference.forEpisode(
+                listOf(s1e2English),
+                preferredLanguage = null,
+                subtitlesOff = false,
+                allowAutomaticEnglish = false
+            )
+        )
+        assertEquals(
+            s1e2Tamil.url,
+            SubtitlePreference.forEpisode(
+                listOf(s1e2English, s1e2Tamil),
+                preferredLanguage = "ta",
+                subtitlesOff = false,
+                allowAutomaticEnglish = false
+            )?.url
+        )
+    }
+
+    @Test
+    fun labelsAreNormalizedToMedia3Tags() {
+        assertEquals("en", SubtitlePreference.languageTag("English"))
+        assertEquals("en", SubtitlePreference.languageTag("EN"))
+        assertEquals("en", SubtitlePreference.languageTag("en"))
+        assertEquals("en", SubtitlePreference.languageTag("eng"))
+        assertEquals("en", SubtitlePreference.languageTag("English (CC)"))
         assertEquals("en", SubtitlePreference.languageTag("English (OpenSubtitles)"))
-        assertEquals("en", SubtitlePreference.languageTag("EN-US"))
-        assertEquals("hi", SubtitlePreference.languageTag("Hindi"))
-        assertEquals("bn", SubtitlePreference.languageTag("Bengali"))
+        assertEquals("en", SubtitlePreference.languageTag("en-US"))
+        assertEquals("ta", SubtitlePreference.languageTag("Tamil"))
+        assertEquals("ta", SubtitlePreference.languageTag("தமிழ்"))
+        assertEquals("hi", SubtitlePreference.languageTag("हिन्दी"))
+        assertEquals("und", SubtitlePreference.languageTag("und"))
         assertNull(SubtitlePreference.languageTag(""))
+        assertNull(SubtitlePreference.languageTag(null))
+        assertTrue(SubtitlePreference.isEnglish("ENG"))
+        assertFalse(SubtitlePreference.isEnglish("Tamil"))
     }
 }

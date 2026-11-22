@@ -61,6 +61,9 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.example.data.model.*
 import com.example.data.network.ClearKeyHelper
+import com.example.ui.components.LiquidDots
+import com.example.ui.components.LiquidFilterChip
+import com.example.ui.components.liquidGlass
 import com.example.ui.theme.*
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -570,8 +573,7 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel, initialQuer
                 // Country Selector Pill (Flag + ISO Code)
                 Row(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(ObsidianCard)
+                        .liquidGlass(20.dp, alpha = 0.34f)
                         .clickable { showCountryDialog = true }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -605,7 +607,8 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel, initialQuer
                 onValueChange = { searchQuery = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .liquidGlass(24.dp, alpha = 0.30f),
                 placeholder = { Text("Search channel...", color = TextSecondary, fontSize = 13.sp) },
                 leadingIcon = {
                     Icon(Icons.Filled.Search, contentDescription = "Search", tint = TextSecondary, modifier = Modifier.size(20.dp))
@@ -619,14 +622,14 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel, initialQuer
                 },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = CinematicRed,
-                    unfocusedBorderColor = ObsidianCard,
-                    focusedContainerColor = ObsidianCard,
-                    unfocusedContainerColor = ObsidianCard,
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
                     focusedTextColor = TextPrimary,
                     unfocusedTextColor = TextPrimary
                 ),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(24.dp)
             )
 
             if (searchQuery.isBlank()) RecentSearches(viewModel, "Live TV") { searchQuery = it }
@@ -648,21 +651,11 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel, initialQuer
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(categories) { cat ->
-                        val isSelected = selectedCategory == cat
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(if (isSelected) CinematicRed else ObsidianCard)
-                                .clickable { selectedCategory = cat }
-                                .padding(horizontal = 16.dp, vertical = 7.dp)
-                        ) {
-                            Text(
-                                text = cat,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) Color.White else TextSecondary
-                            )
-                        }
+                        LiquidFilterChip(
+                            selected = selectedCategory == cat,
+                            onClick = { selectedCategory = cat },
+                            label = cat
+                        )
                     }
                 }
             }
@@ -671,7 +664,7 @@ fun LiveTvScreen(viewModel: com.example.ui.viewmodel.MovieViewModel, initialQuer
             if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = CinematicRed, modifier = Modifier.size(36.dp))
+                        LiquidDots(dotSize = 8.dp)
                         Spacer(modifier = Modifier.height(12.dp))
                         Text("Loading $selectedCountryName channels...", color = TextSecondary, fontSize = 14.sp)
                     }

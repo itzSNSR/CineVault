@@ -1,7 +1,7 @@
 {
-  "versionName": "4.6",
-  "versionCode": 11,
+  "versionName": "4.7",
+  "versionCode": 12,
   "forceUpdate": false,
-  "changelog": "• CineVault 4.6 by SNSR\n• New CV monogram branding: launcher, adaptive and monochrome icons, splash and Settings\n• Midnight Amethyst glass theme with the floating navigation dock\n• Library with Continue Watching, Watchlist, History and recent searches\n• Persistent download queue with resume for direct and HLS downloads\n• Live TV favorites, local search history, playback and subtitle fixes",
-  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.6/CineVault.apk"
+  "changelog": "• CineVault 4.7 by SNSR\n• Midnight Amethyst liquid-glass surfaces across Home, Search, Details and Live TV\n• Stable CineVault wordmark and draggable liquid bottom navigation with spring motion\n• Branded CineVault-to-Play loading and compact buffering animation\n• Player brightness, media-volume and horizontal seek gestures with glass HUDs\n• Seek Lock for online and offline playback, with existing gestures preserved\n• Android 7+ compatibility and existing provider playback preserved",
+  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.7/CineVault.apk"
 }

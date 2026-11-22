@@ -30,6 +30,27 @@ Everything ships in one APK, no account required to browse.
 
 ---
 
+## Official website
+
+The download landing page source lives in [`docs/`](docs/) and is ready for GitHub Pages
+from `main` → `/docs`. It is plain HTML, CSS and JavaScript with no build step; see
+[`docs/README.md`](docs/README.md) for local preview, asset and deployment details.
+Enable Pages in the repository settings to serve it at
+**https://itzsnsr.github.io/CineVault/**; the hosted site is not enabled yet.
+
+---
+
+## What's new in 4.7
+
+- **Midnight Amethyst liquid glass** — native translucent glass surfaces across Home, Search, Details, Library and Live TV
+- **CineVault wordmark and liquid navigation** — a stable brand lockup and draggable bottom navigation with spring motion
+- **Branded loading and buffering** — the CineVault-to-Play transition and compact buffering morph
+- **Player gestures and HUDs** — brightness, media-volume and horizontal seek gestures with glass overlays
+- **Seek Lock** — lock accidental seek gestures during online and offline playback
+- **Compatibility preserved** — Android 7.0+, existing providers and playback behavior remain unchanged
+
+---
+
 ## Tech stack
 
 | Layer | Libraries |
@@ -100,11 +121,11 @@ The app reads a small manifest on startup and when you tap **Settings → Check 
 
 ```json
 {
-  "versionName": "4.6",
-  "versionCode": 11,
+  "versionName": "4.7",
+  "versionCode": 12,
   "forceUpdate": false,
   "changelog": "• What changed in this build",
-  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.6/CineVault.apk"
+  "downloadUrl": "https://github.com/itzSNSR/CineVault/releases/download/v4.7/CineVault.apk"
 }
 ```
 
