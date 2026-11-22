@@ -123,9 +123,10 @@ object SubtitlePreference {
         available: List<SubtitleItem>,
         preferredLanguage: String?,
         subtitlesOff: Boolean,
-        allowAutomaticEnglish: Boolean = true
+        allowAutomaticEnglish: Boolean = true,
+        embeddedLanguage: String? = null
     ): SubtitleItem? {
-        if (subtitlesOff) return null
+        if (subtitlesOff || embeddedLanguage != null) return null
         val candidates = available.filter { it.url.isNotBlank() }
         if (candidates.isEmpty()) return null
 

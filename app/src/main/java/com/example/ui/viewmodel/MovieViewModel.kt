@@ -2053,7 +2053,8 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     available = info.subTitleList,
                     preferredLanguage = preferredSubtitleLanguage(),
                     subtitlesOff = subtitlesOff || embeddedLanguage != null,
-                    allowAutomaticEnglish = selectedResource?.name?.contains("dub", true) != true
+                    allowAutomaticEnglish = selectedResource?.name?.contains("dub", true) != true,
+                    embeddedLanguage = embeddedLanguage
                 )
                 selectedStream = selectStreamByPreference(info.streamList, defaultStreamQuality)
                 isPlaying = true

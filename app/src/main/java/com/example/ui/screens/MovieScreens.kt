@@ -2962,8 +2962,20 @@ fun PlayerScreen(viewModel: MovieViewModel) {
 
             // Off never attaches a caption, and the item only ever carries this
             // episode's own subtitle URL (the ViewModel cleared the old selection).
-            val episodeSubtitle = viewModel.selectedSubtitle.takeUnless { viewModel.subtitlesOff }
+            val episodeSubtitle = viewModel.selectedSubtitle.takeUnless {
+                viewModel.subtitlesOff || viewModel.embeddedLanguage != null
+            }
             val episodeSubtitleTag = SubtitlePreference.languageTag(episodeSubtitle?.language)
+            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .setPreferredTextLanguage(
+                    viewModel.embeddedLanguage
+                        ?: episodeSubtitleTag
+                        ?: SubtitlePreference.ENGLISH
+                )
+                .setSelectUndeterminedTextLanguage(viewModel.embeddedLanguage == SubtitlePreference.UNDETERMINED)
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, viewModel.subtitlesOff)
+                .build()
             val mediaItemBuilder = MediaItem.Builder().setMediaId(entry.id).setUri(Uri.parse(streamUrl))
             if (episodeSubtitle != null && !subtitleUrl.isNullOrEmpty()) {
                 val mimeType = if (episodeSubtitle.format.equals("vtt", true) || Uri.parse(subtitleUrl).path.orEmpty().endsWith(".vtt", true)) {
@@ -2995,7 +3007,6 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                 .coerceAtLeast(0L)
             val restoreSpeed = if (sameEpisode) exoPlayer.playbackParameters.speed else 1f
             var positionApplied = false
-
             val currentEpisode = viewModel.currentEpisode
             val episodes = viewModel.episodesList
             if (subject.isTvShow && episodes.isNotEmpty() && currentEpisode != null) {
@@ -6536,6 +6547,7 @@ fun OfflinePlayerScreen(
         val subtitleTag = subtitle?.let { SubtitlePreference.languageTag(it.second) }
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
             .buildUpon()
+            .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_TEXT)
             .setPreferredTextLanguage(subtitleTag ?: SubtitlePreference.ENGLISH)
             .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, subtitle == null)
             .build()

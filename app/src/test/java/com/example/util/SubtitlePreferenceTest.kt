@@ -90,6 +90,18 @@ class SubtitlePreferenceTest {
     }
 
     @Test
+    fun embeddedTrackSelectionWinsOverExternalCaptions() {
+        assertNull(
+            SubtitlePreference.forEpisode(
+                listOf(s1e2English),
+                "English",
+                subtitlesOff = false,
+                embeddedLanguage = "ja"
+            )
+        )
+    }
+
+    @Test
     fun noUsableSubtitleMeansNoSelection() {
         assertNull(SubtitlePreference.forEpisode(emptyList(), null, subtitlesOff = false))
         assertNull(
