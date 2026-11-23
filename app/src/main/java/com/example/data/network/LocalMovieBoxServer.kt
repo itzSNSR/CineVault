@@ -2333,6 +2333,16 @@ class LocalMovieBoxServer(private val context: Context, private val port: Int = 
                                 )
                                 return false
                             }
+                            if (!com.example.util.SubtitleEpisodeMatcher.claimUrl(
+                                    finalSubjectId, targetCaptionSeason, targetCaptionEpisode, subUrl
+                                )
+                            ) {
+                                Log.w(
+                                    "LocalMovieBoxServer",
+                                    "Ignored subtitle URL reused by a different episode: S$season E$episode"
+                                )
+                                return false
+                            }
                             if (subtitlesMapped.any { it["url"] == subUrl }) return false
                             subtitlesMapped.add(
                                 mapOf(
