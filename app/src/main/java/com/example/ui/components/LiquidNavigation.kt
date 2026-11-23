@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -203,6 +204,9 @@ fun LiquidNavigationBar(
                         targetValue = if (selected) 1f else 0.72f,
                         label = "nav-label-${item.id}"
                     )
+                    // The custom liquid pill is the sole selection feedback.
+                    // Disable Compose's rectangular default ripple for each tab cell.
+                    val interactionSource = remember(item.id) { MutableInteractionSource() }
                     Column(
                         Modifier
                             .weight(1f)
@@ -210,6 +214,8 @@ fun LiquidNavigationBar(
                             .testTag("nav_${item.id}")
                             .selectable(
                                 selected = selected,
+                                interactionSource = interactionSource,
+                                indication = null,
                                 role = Role.Tab,
                                 onClick = { onSelected(index) }
                             ),
