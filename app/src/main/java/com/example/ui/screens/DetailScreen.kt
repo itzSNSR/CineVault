@@ -63,6 +63,7 @@ import com.example.data.model.StreamItem
 import com.example.data.model.SubtitleItem
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MovieViewModel
+import com.example.util.EpisodeSearchIndex
 import com.example.ui.viewmodel.ActiveDownload
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
@@ -89,6 +90,16 @@ fun DetailScreen(viewModel: MovieViewModel) {
     val resume = last?.takeIf { it.resumePosition > 0 }
     var expanded by remember(subject.id) { mutableStateOf(false) }
     var overflows by remember(subject.id) { mutableStateOf(false) }
+    // Episode search is metadata-only: it does not fetch a stream or change playback.
+    var episodeQuery by remember(subject.id) { mutableStateOf("") }
+    val searchableEpisodes = remember(subject.id, subject.seasonList, viewModel.episodesList) {
+        EpisodeSearchIndex.build(subject, viewModel.episodesList)
+    }
+    val displayedEpisodes = if (episodeQuery.isBlank()) {
+        viewModel.episodesList
+    } else {
+        EpisodeSearchIndex.filter(searchableEpisodes, episodeQuery).map { it.episode }
+    }
     val context = LocalContext.current
     val isFav by viewModel.isFavoriteFlow(subject.id).collectAsState(false)
 
@@ -314,9 +325,46 @@ fun DetailScreen(viewModel: MovieViewModel) {
                 }
             }
 
-            // TV Show Episodes List Section
+            // Search title or episode number across all seasons (including 1000+ episodes).
             if (subject.isTvShow) {
-                if (viewModel.isLoadingEpisodes) {
+                item {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+                        Text(
+                            "Episodes",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = episodeQuery,
+                            onValueChange = { episodeQuery = it },
+                            modifier = Modifier.fillMaxWidth().testTag("episode_search_field"),
+                            singleLine = true,
+                            label = { Text("Search by title or episode number") },
+                            placeholder = { Text("E1000, S2E5, Luffy...") },
+                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (episodeQuery.isNotEmpty()) {
+                                    IconButton(onClick = { episodeQuery = "" }) {
+                                        Icon(Icons.Filled.Close, contentDescription = "Clear episode search")
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(18.dp),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search)
+                        )
+                        if (episodeQuery.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "${displayedEpisodes.size} matching episodes",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+                if (viewModel.isLoadingEpisodes && episodeQuery.isBlank()) {
                     item {
                         Box(
                             modifier = Modifier
@@ -335,7 +383,7 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             }
                         }
                     }
-                } else if (viewModel.episodesList.isEmpty()) {
+                } else if (displayedEpisodes.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier
@@ -344,14 +392,17 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "No episodes available for this season",
+                                text = if (episodeQuery.isNotBlank()) "No matching episodes" else "No episodes available for this season",
                                 color = TextSecondary,
                                 fontSize = 14.sp
                             )
                         }
                     }
                 } else {
-                    items(viewModel.episodesList) { ep ->
+                    items(
+                        items = displayedEpisodes,
+                        key = { it.episodeId }
+                    ) { ep ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
