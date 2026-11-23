@@ -36,6 +36,14 @@ class SubtitleEpisodeMatcherTest {
         ))
     }
 
+    @Test fun detectsSameSubtitleUrlReusedForAnotherEpisode() {
+        val url = "https://example.org/shared-subtitle-test.vtt"
+        assertTrue(SubtitleEpisodeMatcher.claimUrl("duplicate-test-show", 1, 1, url))
+        assertTrue(SubtitleEpisodeMatcher.claimUrl("duplicate-test-show", 1, 1, url))
+        assertFalse(SubtitleEpisodeMatcher.claimUrl("duplicate-test-show", 1, 2, url))
+        assertTrue(SubtitleEpisodeMatcher.claimUrl("another-test-show", 1, 2, url))
+    }
+
     @Test fun permitsUnknownNamesFromExactEpisodeEndpoint() {
         assertTrue(SubtitleEpisodeMatcher.belongsToEpisode(
             mapOf("lanName" to "English", "url" to "https://cdn.test/english.srt?hash=2983829"),
