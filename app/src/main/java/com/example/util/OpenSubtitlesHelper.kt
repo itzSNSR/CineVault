@@ -96,23 +96,45 @@ object OpenSubtitlesHelper {
                 return null
             }
 
-            // Extract file_id from the best match
+            // Pick a file with verified season/episode metadata when available.
+            // Never trust the first result blindly: it may be another episode.
             var targetFileId: Long? = null
             var matchedFileName = "$cleanedTitle.srt"
 
             for (i in 0 until dataArray.length()) {
                 val item = dataArray.optJSONObject(i) ?: continue
                 val attributes = item.optJSONObject("attributes") ?: continue
-                val files = attributes.optJSONArray("files") ?: continue
-                if (files.length() > 0) {
-                    val fileObj = files.optJSONObject(0) ?: continue
-                    val fid = fileObj.optLong("file_id", -1L)
-                    if (fid > 0) {
-                        targetFileId = fid
-                        matchedFileName = fileObj.optString("file_name", matchedFileName)
-                        break
-                    }
+                val feature = attributes.optJSONObject("feature_details")
+                val episodeMetadata = mutableMapOf<String, Any?>()
+                val seasonNum = feature?.optInt("season_number", -1) ?: -1
+                val episodeNum = feature?.optInt("episode_number", -1) ?: -1
+                if (seasonNum >= 0) episodeMetadata["season"] = seasonNum
+                if (episodeNum >= 0) episodeMetadata["episode"] = episodeNum
+                if (attributes.has("season_number")) {
+                    episodeMetadata["season"] = attributes.optInt("season_number", seasonNum)
                 }
+                if (attributes.has("episode_number")) {
+                    episodeMetadata["episode"] = attributes.optInt("episode_number", episodeNum)
+                }
+
+                val files = attributes.optJSONArray("files") ?: continue
+                for (j in 0 until files.length()) {
+                    val fileObj = files.optJSONObject(j) ?: continue
+                    val fid = fileObj.optLong("file_id", -1L)
+                    if (fid <= 0) continue
+                    val fileName = fileObj.optString("file_name", matchedFileName)
+                    val candidate = episodeMetadata + ("fileName" to fileName)
+                    if (!SubtitleEpisodeMatcher.belongsToEpisode(
+                            candidate, if (isMovie) null else season,
+                            if (isMovie) null else episode
+                        )
+                    ) continue
+
+                    targetFileId = fid
+                    matchedFileName = fileName
+                    break
+                }
+                if (targetFileId != null) break
             }
 
             if (targetFileId == null) {
