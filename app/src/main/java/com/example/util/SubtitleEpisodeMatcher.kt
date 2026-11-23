@@ -7,6 +7,18 @@ import java.net.URLDecoder
  * filenames are accepted only when requested from the current episode's API.
  */
 object SubtitleEpisodeMatcher {
+    // A static subtitle URL cannot belong to two different episodes of one show.
+    // Track URLs within this app process to catch providers returning E1 for E2.
+    private val urlOwners = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    fun claimUrl(subjectId: String, season: Int?, episode: Int?, url: String): Boolean {
+        if (episode == null || episode <= 0) return true
+        if (urlOwners.size > 5000) urlOwners.clear()
+        val owner = "$season:$episode"
+        val old = urlOwners.putIfAbsent("$subjectId|$url", owner)
+        return old == null || old == owner
+    }
+
     private val seasonEpisode = Regex("""(?i)(?:^|[^a-z0-9])s(?:eason)?[ ._-]*0*(\d{1,3})[ ._-]*e(?:p(?:isode)?)?[ ._-]*0*(\d{1,5})(?!\d)""")
     private val episodeLabel = Regex("""(?i)(?:^|[^a-z0-9])(?:episode|ep|e)[ ._#-]*0*(\d{1,5})(?!\d)""")
 
