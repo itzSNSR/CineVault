@@ -10,8 +10,8 @@ import com.example.data.model.MovieSubject
 data class IndexedEpisode(val episode: Episode, val absoluteNumber: Int)
 
 object EpisodeSearchIndex {
-    private val seasonEpisode = Regex("""(?i)^s\\s*0*(\\d+)\\s*[-._ ]?\\s*e\\s*0*(\\d+)$""")
-    private val episodeNumber = Regex("""(?i)^(?:episode|ep|e)?\\s*#?\\s*0*(\\d+)$""")
+    private val seasonEpisode = Regex("""(?i)^s\s*0*(\d+)\s*[-._ ]?\s*e\s*0*(\d+)$""")
+    private val episodeNumber = Regex("""(?i)^(?:episode|ep|e)?\s*#?\s*0*(\d+)$""")
 
     fun build(subject: MovieSubject, fallback: List<Episode>): List<IndexedEpisode> {
         val seasons = subject.seasonList
