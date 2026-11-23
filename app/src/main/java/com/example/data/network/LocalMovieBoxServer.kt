@@ -2437,8 +2437,9 @@ class LocalMovieBoxServer(private val context: Context, private val port: Int = 
                             }
                         }
 
-                        // Dedicated subtitle service is a last resort.
-                        if (subtitlesMapped.isEmpty() && movieTitle.isNotBlank()) {
+                        // Dedicated subtitle service fills a missing English track,
+                        // preserving any verified native-language captions.
+                        if (!hasEnglishCaption() && movieTitle.isNotBlank()) {
                             try {
                                 val openSub = com.example.util.OpenSubtitlesHelper.fetchSubtitle(
                                     client = okHttpClient,
