@@ -399,10 +399,7 @@ fun DetailScreen(viewModel: MovieViewModel) {
                         }
                     }
                 } else {
-                    items(
-                        items = displayedEpisodes,
-                        key = { it.episodeId }
-                    ) { ep ->
+                    items(displayedEpisodes) { ep ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
