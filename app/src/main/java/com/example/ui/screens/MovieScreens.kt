@@ -65,6 +65,7 @@ import com.example.ui.components.liquidGlass
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MovieViewModel
 import com.example.util.SubtitlePreference
+import com.example.util.EpisodeSearchIndex
 import com.example.data.download.DownloadQueue
 import com.example.ui.viewmodel.ActiveDownload
 import kotlinx.coroutines.isActive
@@ -2584,6 +2585,15 @@ fun PlayerScreen(viewModel: MovieViewModel) {
     }
 
     var activeSheet by remember { mutableStateOf<String?>(null) }
+    var episodeSearchQuery by remember(subject.id) { mutableStateOf("") }
+    val searchableEpisodeIndex = remember(subject.id, subject.seasonList, viewModel.episodesList) {
+        EpisodeSearchIndex.build(subject, viewModel.episodesList)
+    }
+    val searchedEpisodes = if (episodeSearchQuery.isBlank()) {
+        viewModel.episodesList
+    } else {
+        EpisodeSearchIndex.filter(searchableEpisodeIndex, episodeSearchQuery).map { it.episode }
+    }
     var isDownloadSelectionMode by remember { mutableStateOf(false) }
     var selectedDownloadQuality by remember { mutableStateOf(viewModel.defaultDownloadQuality.ifEmpty { "1080p" }) }
     val selectedDownloadEpisodes = remember { androidx.compose.runtime.mutableStateListOf<com.example.data.model.Episode>() }
@@ -4025,7 +4035,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                     "subtitle" -> listOf("Off") + playInfo.subTitleList
                                     "quality" -> playInfo.streamList
                                     "speed" -> listOf("0.5x", "0.75x", "1.0x (Normal)", "1.25x", "1.5x", "2.0x")
-                                    "episodes" -> viewModel.episodesList
+                                    "episodes" -> searchedEpisodes
                                     else -> emptyList()
                                 }
                                 
@@ -4035,6 +4045,27 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                     verticalArrangement = Arrangement.spacedBy(10.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
+                                    if (activeSheet == "episodes") {
+                                        OutlinedTextField(
+                                            value = episodeSearchQuery,
+                                            onValueChange = { episodeSearchQuery = it },
+                                            modifier = Modifier.fillMaxWidth().testTag("player_episode_search"),
+                                            singleLine = true,
+                                            label = { Text("Find episode number or title") },
+                                            placeholder = { Text("1000, S2E5, Luffy...") },
+                                            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                                            trailingIcon = {
+                                                if (episodeSearchQuery.isNotEmpty()) {
+                                                    IconButton(onClick = { episodeSearchQuery = "" }) {
+                                                        Icon(Icons.Filled.Close, contentDescription = "Clear episode search")
+                                                    }
+                                                }
+                                            }
+                                        )
+                                        if (episodeSearchQuery.isNotBlank()) {
+                                            Text("${searchedEpisodes.size} matching episodes", color = TextSecondary, fontSize = 12.sp)
+                                        }
+                                    }
                                     chunked.forEach { rowItems ->
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
@@ -4957,7 +4988,7 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                                         "subtitle" -> listOf("Off") + playInfo.subTitleList
                                         "quality" -> playInfo.streamList
                                         "speed" -> listOf("0.5x", "0.75x", "1.0x (Normal)", "1.25x", "1.5x", "2.0x")
-                                        "episodes" -> viewModel.episodesList
+                                        "episodes" -> searchedEpisodes
                                         else -> emptyList()
                                     }
                             
@@ -4966,6 +4997,26 @@ fun PlayerScreen(viewModel: MovieViewModel) {
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
+                            if (activeSheet == "episodes") {
+                                item {
+                                    OutlinedTextField(
+                                        value = episodeSearchQuery,
+                                        onValueChange = { episodeSearchQuery = it },
+                                        modifier = Modifier.fillMaxWidth().testTag("player_episode_search"),
+                                        singleLine = true,
+                                        label = { Text("Find episode number or title") },
+                                        placeholder = { Text("1000, S2E5, Luffy...") },
+                                        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                                        trailingIcon = {
+                                            if (episodeSearchQuery.isNotEmpty()) {
+                                                IconButton(onClick = { episodeSearchQuery = "" }) {
+                                                    Icon(Icons.Filled.Close, contentDescription = "Clear episode search")
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                            }
                             val chunked = itemsList.chunked(cols)
                             items(chunked.size) { index ->
                                 val rowItems = chunked[index]
