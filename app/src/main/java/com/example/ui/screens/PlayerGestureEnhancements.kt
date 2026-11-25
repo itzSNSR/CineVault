@@ -79,7 +79,8 @@ fun Modifier.playerDragGestures(
     player: ExoPlayer,
     seekEnabled: Boolean,
     onHud: (PlayerGestureHud?) -> Unit,
-    onSeekCommit: (Long) -> Unit
+    onSeekCommit: (Long) -> Unit,
+    enabled: Boolean = true
 ): Modifier = composed {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -89,7 +90,8 @@ fun Modifier.playerDragGestures(
     val density = LocalDensity.current
     val touchSlop = with(density) { 12.dp.toPx() }
 
-    pointerInput(player, seekEnabled, activity, audioManager) {
+    pointerInput(player, seekEnabled, enabled, activity, audioManager) {
+        if (!enabled) return@pointerInput
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
             var mode = Mode.None

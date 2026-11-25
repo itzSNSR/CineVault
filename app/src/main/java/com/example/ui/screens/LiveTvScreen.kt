@@ -1217,11 +1217,11 @@ fun UnifiedLiveTvPlayerDialog(
     var showChannelDrawer by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(true) }
     var isLocked by remember { mutableStateOf(false) }
-    var resizeMode by remember { mutableStateOf(androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+    val display = rememberDisplayPreferences()
+    var captionsOff by remember { mutableStateOf(false) }
 
     // Stream info & audio tracks
     var videoResolution by remember { mutableStateOf<String?>(null) }
-    var availableAudioTracks by remember { mutableStateOf<List<LiveAudioTrackItem>>(emptyList()) }
     var showAudioDialog by remember { mutableStateOf(false) }
 
 
@@ -1364,39 +1364,6 @@ fun UnifiedLiveTvPlayerDialog(
                 }
             }
 
-            override fun onTracksChanged(tracks: Tracks) {
-                val audioList = mutableListOf<LiveAudioTrackItem>()
-                for (group in tracks.groups) {
-                    if (group.type == C.TRACK_TYPE_AUDIO) {
-                        val trackGroup = group.mediaTrackGroup
-                        for (i in 0 until trackGroup.length) {
-                            val format = trackGroup.getFormat(i)
-                            val lang = format.language ?: "und"
-                            val label = format.label ?: when (lang) {
-                                "hi", "hin" -> "Hindi"
-                                "en", "eng" -> "English"
-                                "ta", "tam" -> "Tamil"
-                                "te", "tel" -> "Telugu"
-                                "bn", "ben" -> "Bengali"
-                                "mr", "mar" -> "Marathi"
-                                "pa", "pan" -> "Punjabi"
-                                "gu", "guj" -> "Gujarati"
-                                "kn", "kan" -> "Kannada"
-                                "ml", "mal" -> "Malayalam"
-                                else -> if (lang != "und") lang.uppercase() else "Audio Track ${audioList.size + 1}"
-                            }
-                            audioList.add(
-                                LiveAudioTrackItem(
-                                    language = lang,
-                                    displayName = label,
-                                    isSelected = group.isTrackSelected(i)
-                                )
-                            )
-                        }
-                    }
-                }
-                availableAudioTracks = audioList
-            }
         }
 
         exoPlayer.addListener(listener)
@@ -1416,7 +1383,6 @@ fun UnifiedLiveTvPlayerDialog(
         isResolving = true
         resolveError = null
         videoResolution = null
-        availableAudioTracks = emptyList()
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
 
@@ -1785,7 +1751,7 @@ fun UnifiedLiveTvPlayerDialog(
     }
 
     BackHandler {
-        onDismiss()
+        if (isLocked) { isLocked = false; areControlsVisible = true } else onDismiss()
     }
 
     Box(
@@ -1802,7 +1768,7 @@ fun UnifiedLiveTvPlayerDialog(
                         useController = false
                         setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                         this.keepScreenOn = true
-                        this.resizeMode = resizeMode
+                        this.resizeMode = display.resize
                         layoutParams = android.widget.FrameLayout.LayoutParams(
                             android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
                             android.widget.FrameLayout.LayoutParams.MATCH_PARENT
@@ -1810,7 +1776,8 @@ fun UnifiedLiveTvPlayerDialog(
                     }
                 },
                 update = { view ->
-                    view.resizeMode = resizeMode
+                    view.resizeMode = display.resize
+                    applySubtitleStyle(view, display)
                     view.keepScreenOn = true
                 },
                 modifier = Modifier.fillMaxSize()
@@ -2018,7 +1985,7 @@ fun UnifiedLiveTvPlayerDialog(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 // Audio Track Picker Button (if multiple tracks exist)
-                                if (availableAudioTracks.size > 1) {
+                                run {
                                     IconButton(
                                         onClick = { showAudioDialog = true },
                                         modifier = Modifier
@@ -2026,8 +1993,8 @@ fun UnifiedLiveTvPlayerDialog(
                                             .background(Color.Black.copy(alpha = 0.6f), CircleShape)
                                     ) {
                                         Icon(
-                                            Icons.Filled.Audiotrack,
-                                            contentDescription = "Audio Tracks",
+                                            Icons.Filled.Settings,
+                                            contentDescription = "Playback settings",
                                             tint = Color.White,
                                             modifier = Modifier.size(18.dp)
                                         )
@@ -2046,32 +2013,6 @@ fun UnifiedLiveTvPlayerDialog(
                                         contentDescription = "Reload",
                                         tint = Color.White,
                                         modifier = Modifier.size(18.dp)
-                                    )
-                                }
-
-                                // Aspect Ratio Toggle (FIT / ZOOM / STRETCH)
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(Color.Black.copy(alpha = 0.6f))
-                                        .clickable {
-                                            resizeMode = when (resizeMode) {
-                                                androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                                androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
-                                                else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                            }
-                                        }
-                                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                                ) {
-                                    Text(
-                                        text = when (resizeMode) {
-                                            androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "ZOOM"
-                                            androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL -> "STRETCH"
-                                            else -> "FIT"
-                                        },
-                                        color = Color.White,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
                                     )
                                 }
 
@@ -2357,51 +2298,22 @@ fun UnifiedLiveTvPlayerDialog(
                 }
             }
 
-            // Audio Track Selection Dialog
-            if (showAudioDialog && availableAudioTracks.isNotEmpty()) {
-                AlertDialog(
-                    onDismissRequest = { showAudioDialog = false },
-                    title = {
-                        Text("Audio Language Tracks", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            if (showAudioDialog) {
+                UniversalPlayerSheet(
+                    player = exoPlayer, speed = 1f, onSpeed = {}, showSpeed = false,
+                    resizeMode = display.resize, onResizeMode = { display.resize = it },
+                    subtitleLanguages = emptyList(), selectedSubtitleLanguage = null, subtitlesOff = captionsOff,
+                    onSelectSubtitle = {
+                        captionsOff = true
+                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                            .clearOverridesOfType(C.TRACK_TYPE_TEXT).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
                     },
-                    text = {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(availableAudioTracks) { track ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(if (track.isSelected) CinematicRed.copy(alpha = 0.2f) else ObsidianCard)
-                                        .clickable {
-                                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
-                                                .buildUpon()
-                                                .setPreferredAudioLanguage(track.language)
-                                                .build()
-                                            showAudioDialog = false
-                                        }
-                                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = track.displayName,
-                                        color = if (track.isSelected) CinematicRed else TextPrimary,
-                                        fontWeight = if (track.isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        fontSize = 14.sp
-                                    )
-                                    if (track.isSelected) {
-                                        Icon(Icons.Filled.Check, contentDescription = "Selected", tint = CinematicRed, modifier = Modifier.size(18.dp))
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { showAudioDialog = false }) {
-                            Text("Close", color = CinematicRed)
-                        }
-                    },
-                    containerColor = ObsidianCard
+                    onEmbedded = { captionsOff = false }, onRetrySubtitles = {}, online = false,
+                    subtitleScale = display.scale, onSubtitleScale = { display.scale = it },
+                    subtitleColor = display.color, onSubtitleColor = { display.color = it },
+                    subtitleBackground = display.background, onSubtitleBackground = { display.background = it },
+                    subtitlePosition = display.position, onSubtitlePosition = { display.position = it },
+                    subtitleDelayMs = 0, onSubtitleDelay = {}, onDismiss = { showAudioDialog = false }
                 )
             }
 

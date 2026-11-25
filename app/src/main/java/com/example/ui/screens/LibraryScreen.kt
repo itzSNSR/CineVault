@@ -48,7 +48,7 @@ fun CapsuleNavigation(active: String, restricted: Boolean, navigate: (String) ->
 @Composable
 fun ContinueWatching(vm: MovieViewModel) {
     val history by vm.historyList.collectAsState()
-    val entries = history.distinctBy { it.subjectId.removePrefix("moviebox_").removePrefix("anifam_") }.filter { it.resumePosition > 0 }
+    val entries = history.filter { it.aniFamHistory == vm.isAniFam }.distinctBy { it.titleKey }.filter { it.resumePosition > 0 }
     if (entries.isEmpty()) return
     Column(Modifier.fillMaxWidth().padding(vertical = GlassSpacing)) {
         Text("Continue Watching", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 16.dp))

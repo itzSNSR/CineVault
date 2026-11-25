@@ -27,6 +27,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.data.download.*
+import com.example.data.local.aniFamHistory
+import com.example.data.local.titleKey
 import com.example.data.local.historyKey
 import com.example.data.local.resumePosition
 import kotlinx.coroutines.Job
@@ -215,7 +218,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     ) { loggedIn, aniFam, cloudMbox, cloudAni, localFavs ->
         if (aniFam) {
             if (loggedIn) cloudAni
-            else localFavs.filter { it.id.startsWith("anifam_") || (it.id.all { c -> c.isDigit() } && !it.id.startsWith("moviebox_")) }
+            else localFavs.filter { it.id.startsWith("anifam_") }
         } else {
             if (loggedIn) cloudMbox
             else localFavs.filter { !it.id.startsWith("anifam_") }
@@ -226,11 +229,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         repository.history,
         snapshotFlow { isAniFam }
     ) { list, aniFam ->
-        if (aniFam) {
-            list.filter { it.id.startsWith("anifam_") || (it.subjectId.all { c -> c.isDigit() } && !it.id.startsWith("moviebox_")) }
-        } else {
-            list.filter { !it.id.startsWith("anifam_") }
-        }
+        list.filter { it.aniFamHistory == aniFam }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Real User Authentication State
@@ -524,6 +523,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     var isDownloadScanLoaded by mutableStateOf(false)
     var playingDownloadedFile by mutableStateOf<java.io.File?>(null)
+    private var askedForStorageAccess = false
 
     // App In-App Update State
     data class AppUpdateInfo(
@@ -542,6 +542,8 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     private var validatedUpdateApk: java.io.File? = null
 
     init {
+        com.example.data.download.DownloadPreferences.load(application)
+        defaultDownloadQuality = com.example.data.download.DownloadPreferences.current.defaultQuality
         viewModelScope.launch(Dispatchers.IO) { com.example.data.download.DownloadQueue.restore(application) }
         if (prefs.mockHost.contains("10.0.2.2") || prefs.mockHost.contains("run.app") || prefs.mockHost.contains("ais-dev-") || prefs.mockHost.isEmpty()) {
             prefs.mockHost = "http://127.0.0.1:3000"
@@ -980,10 +982,12 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     private var detailJob: Job? = null
     private var seasonJob: Job? = null
     private var playbackJob: Job? = null
+    private var captionsJob: Job? = null
     private var playbackGeneration = 0
     private val playbackPrefs = application.getSharedPreferences("playback_preferences", 0)
     var subtitlesOff by mutableStateOf(playbackPrefs.getBoolean("subtitles_off", false))
         private set
+
     var embeddedLanguage by mutableStateOf(
         SubtitlePreference.languageTag(playbackPrefs.getString("embedded_language", null))
     )
@@ -1021,6 +1025,13 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
             .apply()
     }
 
+    fun chooseAutomaticSubtitle() {
+        playbackPrefs.edit().remove("embedded_language").remove("subtitle_language").putBoolean("subtitles_off", false).apply()
+        embeddedLanguage = null
+        subtitlesOff = false
+        selectedSubtitle = SubtitlePreference.forEpisode(playInfo?.subTitleList.orEmpty(), null, false)
+    }
+
     /** Saved language as a normalized tag; older builds may have stored a label. */
     private fun preferredSubtitleLanguage(): String? {
         val raw = playbackPrefs.getString("subtitle_language", null)
@@ -1031,6 +1042,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelPlaybackRequest() {
         // Invalidate any in-flight resolve so a request that is no longer on
         // screen cannot publish subtitles for the new episode.
+        captionsJob?.cancel()
         playbackGeneration++
         playbackJob?.cancel()
         isPlaybackLoading = false
@@ -2155,6 +2167,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun resolvePlayback(requested: Episode?, startOver: Boolean, history: HistoryEntity? = null) {
         playbackJob?.cancel()
+        captionsJob?.cancel()
         val generation = ++playbackGeneration
         playInfo = null
         selectedSubtitle = null
@@ -2182,7 +2195,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 val id = historyKey(isAniFam, subject.id, season, episode)
                 val info = repository.getPlayInfo(subject.id, season, episode, resourceId = selectedResource?.resourceId)
                 val rawKey = id.substringAfter('_')
-                val saved = repository.getHistoryById(id) ?: repository.getHistoryById(rawKey) ?: history
+                val saved = repository.getHistoryById(id) ?: repository.getHistoryById(rawKey)?.takeIf { it.aniFamHistory == isAniFam } ?: history
                 ensureActive()
                 // A newer episode selection (or a cancelled request) always wins,
                 // so a slow older response cannot overwrite the new subtitles.
@@ -2305,152 +2318,6 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun downloadAllSubtitles(
-        targetEpDir: java.io.File,
-        safeTitle: String,
-        subtitles: List<com.example.data.model.SubtitleItem>
-    ) {
-        if (subtitles.isEmpty()) return
-        if (!targetEpDir.exists()) targetEpDir.mkdirs()
-        viewModelScope.launch(Dispatchers.IO) {
-            val client = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-                .followRedirects(true)
-                .build()
-
-            val subArray = org.json.JSONArray()
-            val usedNames = mutableSetOf<String>()
-
-            for ((index, sub) in subtitles.withIndex()) {
-                try {
-                    if (sub.url.isBlank()) continue
-                    val ext = if (sub.url.contains(".vtt", ignoreCase = true) || sub.format.equals("vtt", ignoreCase = true)) "vtt" else "srt"
-                    val rawLang = sub.language.trim().ifBlank { "Track ${index + 1}" }
-                    val safeLang = rawLang.replace(Regex("[/\\\\:*?\"<>|]"), " ").replace(Regex("\\s+"), " ").trim()
-                    var fileName = "$safeLang.$ext"
-                    var counter = 2
-                    while (usedNames.contains(fileName.lowercase())) {
-                        fileName = "$safeLang ($counter).$ext"
-                        counter++
-                    }
-                    usedNames.add(fileName.lowercase())
-                    val subFile = java.io.File(targetEpDir, fileName)
-
-                    if (!subFile.exists() || subFile.length() == 0L) {
-                        val referer = if (sub.url.contains("anifam")) "https://anifam.net/" else "https://moviebox.ph/"
-                        val req = okhttp3.Request.Builder()
-                            .url(sub.url)
-                            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-                            .header("Referer", referer)
-                            .build()
-                        client.newCall(req).execute().use { resp ->
-                            if (resp.isSuccessful) {
-                                val bytes = resp.body?.bytes()
-                                if (bytes != null && bytes.isNotEmpty()) {
-                                    subFile.writeBytes(bytes)
-                                }
-                            }
-                        }
-                    }
-
-                    if (subFile.exists() && subFile.length() > 0) {
-                        val item = org.json.JSONObject()
-                        item.put("language", rawLang)
-                        item.put("fileName", fileName)
-                        subArray.put(item)
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.w("MovieViewModel", "Subtitle download failed for ${sub.language}: ${e.message}")
-                }
-            }
-
-            if (subArray.length() > 0) {
-                try {
-                    val jsonFile = java.io.File(targetEpDir, "subtitles.json")
-                    jsonFile.writeText(subArray.toString())
-                } catch (_: Exception) {}
-            }
-        }
-    }
-
-    fun downloadSingleEpisode(
-        context: android.content.Context,
-        subject: MovieSubject,
-        episode: com.example.data.model.Episode
-    ) {
-        downloadResolved(context, subject, episode)
-    }
-
-    fun downloadMovie(context: android.content.Context, subject: MovieSubject) = downloadResolved(context, subject, null)
-
-    private fun downloadResolved(context: android.content.Context, subject: MovieSubject, episode: Episode?) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val resId = selectedResource?.resourceId
-                val downloadResId = selectedResource?.resourceId?.ifBlank { null } ?: "sub"
-                val playInfoResult = repository.getPlayInfo(
-                    subject.id,
-                    episode?.seasonNumber ?: 0,
-                    episode?.episodeNumber ?: 0,
-                    quality = defaultDownloadQuality,
-                    resourceId = if (isAniFam) downloadResId else resId
-                )
-                val stream = selectStreamByPreference(playInfoResult.streamList, defaultDownloadQuality)
-                    ?: selectHighestQualityStream(playInfoResult.streamList)
-                    ?: playInfoResult.streamList.firstOrNull()
-
-                val streamUrl = stream?.url ?: ""
-                if (streamUrl.isEmpty()) {
-                    safeToast(context, "No stream found for download")
-                    return@launch
-                }
-
-                val safeTitle = if (episode == null) subject.name else "${subject.name} S${episode.seasonNumber}E${episode.episodeNumber.toString().padStart(2, '0')}"
-                val cookies = stream?.cookie ?: ""
-                startDownload(context, subject, safeTitle, streamUrl, cookies, playInfoResult.subTitleList, stream?.quality ?: defaultDownloadQuality, episode)
-            } catch (e: Exception) {
-                safeToast(context, "Download failed: ${e.message}")
-            }
-        }
-    }
-
-    fun startDownload(
-        context: android.content.Context,
-        subject: MovieSubject,
-        safeTitle: String,
-        streamUrl: String,
-        cookies: String = "",
-        subtitles: List<com.example.data.model.SubtitleItem> = emptyList(),
-        quality: String = defaultDownloadQuality,
-        episode: Episode? = currentEpisode
-    ) {
-        val provider = activeProvider
-        val language = selectedResource?.resourceId.orEmpty()
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                fun safeName(value: String) = value.trim().replace(Regex("[^\\p{L}\\p{N}.-]"), "_")
-                    .trim('.').take(110).ifBlank { "Video" }
-                val show = safeName(subject.name)
-                val clean = safeName(safeTitle)
-                val variant = safeName(quality)
-                val folder = getEpisodeStorageDir(context, show, "${clean}_$variant")
-                val headers = downloadHeaders(streamUrl, cookies, provider == PreferencesManager.PROVIDER_ANIFAM)
-                val media = historyKey(provider == PreferencesManager.PROVIDER_ANIFAM, subject.id, episode?.seasonNumber ?: 0, episode?.episodeNumber ?: 0)
-                val key = listOf(media, language, quality.lowercase(java.util.Locale.ROOT)).joinToString("|")
-                val queued = com.example.data.download.DownloadQueue.enqueue(context.applicationContext, key, "$safeTitle · $quality",
-                    streamUrl, headers, folder, subject.poster, quality)
-                if (queued) {
-                    downloadShowPosterOnce(show, subject.poster, folder.parentFile!!)
-                    downloadAllSubtitles(folder, clean, subtitles)
-                    safeToast(context, "Queued · $safeTitle")
-                } else safeToast(context, "Already downloaded or queued")
-            } catch (e: Exception) {
-                safeToast(context, e.message ?: "Unable to queue download")
-            }
-        }
-    }
-
     private fun downloadHeaders(streamUrl: String, cookies: String, ani: Boolean): Map<String, String> {
         val isAniFamStream = ani ||
                 streamUrl.contains("zokoanime", ignoreCase = true) ||
@@ -2529,54 +2396,193 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
         return headersBuilder.build().toMultimap().mapValues { it.value.joinToString("; ") }
     }
 
-    fun downloadEpisodesBatch(
-        context: android.content.Context,
-        episodes: List<com.example.data.model.Episode>,
-        targetQuality: String? = null,
-        onProgressUpdate: ((Int, Int) -> Unit)? = null
-    ) {
-        val subject = selectedSubject ?: return
-        if (episodes.isEmpty()) return
+    // ---------------------------------------------------------------------
+    // Universal download configuration (provider independent)
+    // ---------------------------------------------------------------------
 
-        safeToast(context, "Download started...", Toast.LENGTH_SHORT)
-        viewModelScope.launch(Dispatchers.IO) {
-            val safeShowName = subject.name.trim().replace(Regex("[^a-zA-Z0-9.-]"), "_")
-            val baseDir = getDownloadStorageDir(context)
-            val showDir = java.io.File(baseDir, safeShowName)
-            if (!showDir.exists()) showDir.mkdirs()
-
-            // Pre-download show poster ONCE upfront for the entire batch
-            downloadShowPosterOnce(safeShowName, subject.poster, showDir)
-
-            val resId = selectedResource?.resourceId
-            val downloadResId = selectedResource?.resourceId?.ifBlank { null } ?: "sub"
-            var queuedCount = 0
-            for (ep in episodes) {
-                try {
-                    val playInfoResult = repository.getPlayInfo(
-                        subject.id,
-                        ep.seasonNumber,
-                        ep.episodeNumber,
-                        quality = targetQuality ?: "1080p",
-                        resourceId = if (isAniFam) downloadResId else resId
-                    )
-                    val stream = (if (targetQuality != null) selectStreamByPreference(playInfoResult.streamList, targetQuality) else null)
-                        ?: selectHighestQualityStream(playInfoResult.streamList)
-                        ?: playInfoResult.streamList.firstOrNull()
-                    val streamUrl = stream?.url ?: ""
-                    if (streamUrl.isNotEmpty() && !streamUrl.contains("b164fbfb4347792950bdfbfb563d39d9.mp4")) {
-                        val safeTitle = "${subject.name} S${ep.seasonNumber}E${ep.episodeNumber.toString().padStart(2, '0')}"
-                        val cookies = stream?.cookie ?: ""
-                        startDownload(context, subject, safeTitle, streamUrl, cookies, playInfoResult.subTitleList, stream?.quality ?: defaultDownloadQuality, ep)
-                        queuedCount++
-                        withContext(Dispatchers.Main) {
-                            onProgressUpdate?.invoke(queuedCount, episodes.size)
-                        }
+    /**
+     * Resolves the real, downloadable choices for the universal dialog.
+     * Qualities and subtitle languages come from the provider's own play info,
+     * never from a fixed list, so an unavailable resolution cannot be offered.
+     */
+    suspend fun prepareDownloadOptions(subject: MovieSubject, episode: Episode?): com.example.data.download.DownloadOptions? =
+        withContext(Dispatchers.IO) {
+            val settings = com.example.data.download.DownloadPreferences.current
+            val provider = activeProvider
+            val base = originalSubjectDetail?.takeIf { selectedSubject?.id == subject.id } ?: subject
+            val resources = base.resourceDetectors.distinctBy { it.resourceId }
+            val current = selectedResource?.resourceId
+            val resourceId = resources.firstOrNull { settings.preferredAudio != null && (it.name.equals(settings.preferredAudio, true) || it.resourceId == settings.preferredAudio) }?.resourceId
+                ?: current ?: resources.firstOrNull()?.resourceId
+            val isSeries = subject.isTvShow
+            val declaredSeasons = subject.seasonList.map { it.season }.filter { it > 0 }.distinct().sorted()
+            val activeSeason = episode?.seasonNumber ?: selectedSeason.takeIf { it in declaredSeasons } ?: declaredSeasons.firstOrNull() ?: 1
+            val allEpisodes = linkedMapOf<String, com.example.data.download.DownloadEpisode>()
+            if (isSeries) {
+                for (seasonNumber in declaredSeasons.ifEmpty { listOf(activeSeason) }) {
+                    val list = if (seasonNumber == selectedSeason && episodesList.isNotEmpty() && subject.id == selectedSubject?.id) {
+                        episodesList
+                    } else {
+                        runCatching { repository.getEpisodes(subject.id, seasonNumber) }.getOrDefault(emptyList())
                     }
-                } catch (e: Exception) {
-                    android.util.Log.e("MovieViewModel", "Batch download failed for ep: ${ep.episodeNumber}", e)
+                    list.forEach { ep ->
+                        allEpisodes["${ep.seasonNumber}:${ep.episodeNumber}"] = com.example.data.download.DownloadEpisode(
+                            season = ep.seasonNumber, number = ep.episodeNumber, title = ep.title
+                        )
+                    }
                 }
             }
+            val ordered = allEpisodes.values.sortedWith(compareBy({ it.season }, { it.number }))
+            val probeSeason = episode?.seasonNumber ?: activeSeason
+            val probeNumber = episode?.episodeNumber
+                ?: ordered.firstOrNull { it.season == activeSeason }?.number ?: 0
+            val sourceId = base.id
+            val resolvedId = if (provider != PreferencesManager.PROVIDER_ANIFAM && resourceId?.startsWith("dub_") == true) resourceId.removePrefix("dub_") else sourceId
+            val info = runCatching {
+                repository.getPlayInfo(
+                    resolvedId,
+                    if (isSeries) probeSeason else 0,
+                    if (isSeries) probeNumber else 0,
+                    quality = settings.defaultQuality,
+                    resourceId = resourceId, aniFam = provider == PreferencesManager.PROVIDER_ANIFAM
+                )
+            }.getOrNull() ?: return@withContext null
+
+            val qualities = info.streamList.map { it.quality }.filter { it.isNotBlank() }
+                .distinctBy { it.lowercase(java.util.Locale.ROOT) }
+                .sortedByDescending { downloadQualityRank(it) }
+            com.example.data.download.DownloadOptions(
+                subjectTitle = subject.name,
+                poster = subject.poster,
+                isSeries = isSeries,
+                seasons = ordered.map { it.season }.distinct().sorted(),
+                episodes = ordered,
+                qualities = qualities,
+                audios = resources,
+                subject = subject,
+                provider = provider,
+                sourceId = sourceId,
+                selectedResourceId = resourceId,
+                durationMinutes = subject.duration?.substringBefore(" min")?.trim()?.toIntOrNull()?.takeIf { it > 0 },
+                subtitleLanguages = info.subTitleList.map { it.language }.filter { it.isNotBlank() }.distinct(),
+                defaultQuality = settings.defaultQuality,
+                preselectedSeason = activeSeason,
+                preselectedEpisode = episode?.episodeNumber
+            )
+        }
+
+    suspend fun downloadVariantOptions(options: DownloadOptions, resourceId: String?, target: DownloadEpisode?): PlayInfo {
+        val ani = options.provider == PreferencesManager.PROVIDER_ANIFAM
+        val id = if (!ani && resourceId?.startsWith("dub_") == true) resourceId.removePrefix("dub_") else options.sourceId
+        return repository.getPlayInfo(id, target?.season ?: 0, target?.number ?: 0, options.defaultQuality, resourceId, ani)
+    }
+
+    private fun downloadQualityRank(quality: String): Int {
+        val q = quality.lowercase(java.util.Locale.ROOT)
+        return when {
+            q.contains("4k") || q.contains("2160") -> 2160
+            q.contains("2k") || q.contains("1440") -> 1440
+            q.contains("1080") -> 1080
+            q.contains("720") -> 720
+            q.contains("480") -> 480
+            q.contains("360") -> 360
+            q.contains("highest") || q.contains("auto") -> 1
+            else -> q.filter(Char::isDigit).toIntOrNull() ?: 0
+        }
+    }
+
+    /** Queues the exact episodes/quality/audio/subtitles confirmed in the dialog. */
+    fun startDownloadSelection(
+        context: android.content.Context,
+        subject: MovieSubject,
+        choice: com.example.data.download.DownloadChoice
+    ) {
+        val targets = downloadTargets(subject.isTvShow, choice.episodes)
+        if (targets.isEmpty()) {
+            safeToast(context, "Select at least one episode")
+            return
+        }
+        // Android 11+ refuses writes into the shared Movies folder until the
+        // user grants All-files access. Ask once; a second tap without it keeps
+        // working by falling back to the app's own storage folder.
+        if (!askedForStorageAccess && DownloadStorage.needsPublicStorageAccess()) {
+            askedForStorageAccess = true
+            safeToast(context, "Allow all files access so CineVault can save into Movies/CineVault", Toast.LENGTH_LONG)
+            DownloadStorage.requestPublicStorageAccess(context)
+            return
+        }
+        val ani = choice.provider == PreferencesManager.PROVIDER_ANIFAM
+        val resource = choice.resourceId.orEmpty()
+        val sourceId = if (!ani && resource.startsWith("dub_")) resource.removePrefix("dub_") else choice.sourceId
+        viewModelScope.launch(Dispatchers.IO) {
+            var queued = 0
+            var duplicates = 0
+            val failures = mutableListOf<String>()
+            for (target in targets) {
+                val ep = (target as? DownloadTarget.SeriesEpisode)?.episode
+                val title = if (ep == null) subject.name else "${subject.name} S${ep.season}E${ep.number}"
+                try {
+                    val info = repository.getPlayInfo(sourceId, ep?.season ?: 0, ep?.number ?: 0, choice.quality, resource, ani)
+                    val stream = selectDownloadStream(info.streamList.filterNot { it.url.endsWith("b164fbfb4347792950bdfbfb563d39d9.mp4") }, choice.quality, choice.fallback)
+                        ?: error("${choice.quality} unavailable")
+                    val tracks = info.subTitleList.filter { track -> choice.subtitleLanguages.any { OfflineSubtitlePack.matches(it, track.language) } }
+                    val missing = choice.subtitleLanguages.filter { lang -> tracks.none { OfflineSubtitlePack.matches(lang, it.language) } }
+                    if (missing.isNotEmpty()) error("Missing captions: ${missing.joinToString()}")
+                    val media = historyKey(ani, choice.sourceId, ep?.season ?: 0, ep?.number ?: 0)
+                    val key = listOf(media, resource, stream.quality.lowercase(java.util.Locale.ROOT)).joinToString("|")
+                    // Keep legacy folders readable while giving new source/episode/variant combinations separate paths.
+                    val suffix = java.util.UUID.nameUUIDFromBytes(key.toByteArray()).toString()
+                    val show = DownloadStorage.safeName(subject.name)
+                    val folder = java.io.File(java.io.File(DownloadStorage.directory(context), show), "${DownloadStorage.safeName(title)}_$suffix")
+                    check(folder.isDirectory || folder.mkdirs()) { "Download folder unavailable" }
+                    val added = DownloadQueue.enqueue(context.applicationContext, key, "$title · ${stream.quality}",
+                        stream.url, downloadHeaders(stream.url, stream.cookie, ani), folder, subject.poster, stream.quality, tracks)
+                    if (added) {
+                        queued++
+                        downloadShowPosterOnce(show, subject.poster, folder.parentFile!!)
+                    } else duplicates++
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    failures += "${ep?.label ?: subject.name}: ${failure.message ?: "unavailable"}"
+                }
+            }
+            safeToast(context, buildString {
+                append("Queued $queued")
+                if (duplicates > 0) append(" · $duplicates already queued or saved")
+                if (failures.isNotEmpty()) append(" · ${failures.size} unavailable · ${failures.first()}")
+            }, Toast.LENGTH_LONG)
+        }
+    }
+
+    /**
+     * Re-fetches captions only. The working stream is left untouched, so a
+     * subtitle failure can never interrupt playback.
+     */
+    fun refreshSubtitles(onResult: (Boolean) -> Unit = {}) {
+        val subject = selectedSubject ?: return
+        val episode = currentEpisode
+        val generation = playbackGeneration
+        val stream = selectedStream
+        val provider = activeProvider
+        val resource = selectedResource
+        val original = playInfo ?: return
+        captionsJob?.cancel()
+        captionsJob = viewModelScope.launch {
+            val info = try {
+                repository.getPlayInfo(subject.id, episode?.seasonNumber ?: 0, episode?.episodeNumber ?: 0,
+                    stream?.quality ?: defaultStreamQuality, resource?.resourceId, provider == PreferencesManager.PROVIDER_ANIFAM)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+              catch (_: Exception) { onResult(false); return@launch }
+            ensureActive()
+            if (generation != playbackGeneration || selectedSubject?.id != subject.id || activeProvider != provider ||
+                currentEpisode != episode || selectedResource != resource || selectedStream != stream || playInfo !== original) return@launch
+            if (info.subTitleList.isNotEmpty()) {
+                playInfo = original.copy(subTitleList = info.subTitleList)
+                selectedSubtitle = SubtitlePreference.forEpisode(info.subTitleList, preferredSubtitleLanguage(),
+                    subtitlesOff || embeddedLanguage != null, resource?.name?.contains("dub", true) != true)
+            }
+            onResult(info.subTitleList.isNotEmpty())
         }
     }
 
@@ -2660,11 +2666,9 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } else {
                     val localId = "anifam_$numId"
-                    val isLocalFav = repository.isFavoriteDirect(localId) || repository.isFavoriteDirect(subject.id) || repository.isFavoriteDirect(rawNum)
+                    val isLocalFav = repository.isFavoriteDirect(localId)
                     if (isLocalFav) {
                         repository.deleteFavorite(localId)
-                        repository.deleteFavorite(subject.id)
-                        repository.deleteFavorite(rawNum)
                     } else {
                         repository.insertFavorite(
                             FavoriteEntity(
@@ -2916,22 +2920,14 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteHistoryForSubject(subjectId: String, episodesList: List<HistoryEntity>) {
         val cleanSubjectId = subjectId.removePrefix("anifam_").removePrefix("moviebox_")
-        if (isAniFam) {
-            prefs.addDeletedAniFamAnimeId(cleanSubjectId)
-        }
+        val ani = isAniFam
+        val target = historyKey(ani, cleanSubjectId, 0, 0)
+        if (ani) prefs.addDeletedAniFamAnimeId(cleanSubjectId)
         viewModelScope.launch {
-            // Delete from Room immediately so UI updates instantly
-            repository.deleteHistoryBySubject(cleanSubjectId)
-            repository.deleteHistoryBySubject("anifam_$cleanSubjectId")
-            episodesList.forEach { item ->
-                val cleanItemId = item.id.removePrefix("anifam_").removePrefix("moviebox_")
-                repository.deleteHistory(item.id)
-                repository.deleteHistory("anifam_$cleanItemId")
-                repository.deleteHistory("moviebox_$cleanItemId")
-            }
+            repository.getAllHistoryDirect().filter { it.titleKey == target }.forEach { repository.deleteHistory(it.id) }
 
             // Cloud delete for AniFam
-            if (isAniFam) {
+            if (ani) {
                 val animeId = cleanSubjectId.toIntOrNull()
                 if (animeId != null) {
                     // Delete anime from AniFam continue-watching (endpoint deletes by anime_id)
@@ -2952,12 +2948,9 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun deleteHistoryItemInternal(id: String) {
         val clean = id.removePrefix("anifam_").removePrefix("anifam_").removePrefix("moviebox_")
+        val row = repository.getHistoryById(id) ?: return
         repository.deleteHistory(id)
-        repository.deleteHistory("anifam_$clean")
-        repository.deleteHistory("anifam_anifam_$clean")
-        repository.deleteHistory("moviebox_$clean")
-
-        if (isAniFam) {
+        if (row.aniFamHistory) {
             val animeId = clean.substringBefore("_S").toIntOrNull()
             val epNum = if (clean.contains("_E")) {
                 clean.substringAfterLast("_E").toIntOrNull() ?: 1
@@ -2970,7 +2963,7 @@ class MovieViewModel(application: Application) : AndroidViewModel(application) {
                 val remaining = repository.getAllHistoryDirect().filter {
                     val sId = it.subjectId.removePrefix("anifam_").removePrefix("moviebox_")
                     val iId = it.id.removePrefix("anifam_").removePrefix("moviebox_")
-                    (sId == animeId.toString() || iId.startsWith("${animeId}_S")) &&
+                    it.aniFamHistory && (sId == animeId.toString() || iId.startsWith("${animeId}_S")) &&
                     it.id != id && it.id != "anifam_$clean"
                 }
 

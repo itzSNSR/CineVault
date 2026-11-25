@@ -40,6 +40,7 @@ internal object DirectFileTransfer {
                 val count = input.read(buffer)
                 if (count < 0) break
                 if (append && bytes + count - 1 > rangeEnd) throw InvalidMedia("Server exceeded its declared byte range")
+                DownloadSpeedLimiter.acquire(count)
                 out.write(buffer, 0, count)
                 bytes += count
                 onProgress(bytes, total)

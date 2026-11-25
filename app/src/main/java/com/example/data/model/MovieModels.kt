@@ -74,7 +74,7 @@ data class PlayInfo(
 data class StreamItem(
     val quality: String, // 720p, 1080p, 4K
     val url: String,
-    val size: String = "1.2 GB",
+    val size: String = "",
     val cookie: String = ""
 )
 

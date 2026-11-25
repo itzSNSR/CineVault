@@ -128,3 +128,43 @@ timeout also stops it after 30 minutes without activity.
 - **Out of memory** — choose the 4-core / 16 GB machine type.
 - **`local.properties`** — not needed in Codespaces. Gradle finds the SDK via
   `ANDROID_HOME`; the file is gitignored and only exists on your PC.
+
+## Building from Windows with the helper script (default workflow)
+
+Builds run in this Codespace by default; the PC only edits source and downloads
+the result. Run the helper **from PowerShell** — Git Bash (MSYS) corrupts the
+`gh codespace ssh` tunnel on Windows:
+
+```powershell
+.\scripts\cloud-build.ps1 -BuildType Debug
+.\scripts\cloud-build.ps1 -BuildType Release
+.\scripts\cloud-build.ps1 -BuildType Release -StopCodespace
+```
+
+What it does: verifies `gh`, starts the Codespace if it is stopped, snapshots the
+local worktree (no git push), copies it with `gh codespace cp`, applies it to an
+isolated `cloudbuild/...` branch, proves the remote tree hash equals the local
+tree hash, runs `:app:assembleDebug` / `:app:assembleRelease`, verifies the APK
+(application id, version code/name, `apksigner` signature, certificate), copies
+it to `..\CineVault-CloudBuilds\<version>\`, and writes `build-info.txt`.
+
+It stops with an error when the sync, the build or the signature check fails,
+and it never publishes a release or edits `version.json`.
+
+Release signing uses the Codespaces secrets; `.devcontainer/setup.sh` recreates
+`release-key.jks` and `key.properties` inside the container. The expected release
+certificate is pinned in `..\CineVault-CloudBuilds\expected-signing-cert.txt`.
+
+### SSH requirement
+
+`gh codespace ssh` and `gh codespace cp` need an SSH server in the container.
+`.devcontainer/devcontainer.json` now declares
+`ghcr.io/devcontainers/features/sshd:1`, so a rebuild includes it. In a container
+created before that change, start it once in the Codespace terminal:
+
+```bash
+apt-get install -y openssh-server && service ssh start
+```
+
+(prefix both commands with privilege elevation, i.e. run them as the container's
+administrator)

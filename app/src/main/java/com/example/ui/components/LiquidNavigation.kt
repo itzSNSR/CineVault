@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -203,6 +204,11 @@ fun LiquidNavigationBar(
                         targetValue = if (selected) 1f else 0.72f,
                         label = "nav-label-${item.id}"
                     )
+                    // The tab background is (and stays) transparent: the only
+                    // selection cue is the spring-driven liquid pill above. The
+                    // default M3 ripple drew an un-clipped square over the glass
+                    // pill on every tap, so indication is disabled explicitly.
+                    val interactionSource = remember(item.id) { MutableInteractionSource() }
                     Column(
                         Modifier
                             .weight(1f)
@@ -210,6 +216,8 @@ fun LiquidNavigationBar(
                             .testTag("nav_${item.id}")
                             .selectable(
                                 selected = selected,
+                                interactionSource = interactionSource,
+                                indication = null,
                                 role = Role.Tab,
                                 onClick = { onSelected(index) }
                             ),

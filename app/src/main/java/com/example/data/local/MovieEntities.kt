@@ -43,3 +43,11 @@ fun historyKey(aniFam: Boolean, subjectId: String, season: Int, episode: Int): S
 
 val HistoryEntity.resumePosition: Long
     get() = seeTime.takeIf { it > 0 && (totalTime <= 0 || totalTime - it > minOf(10_000L, totalTime / 20)) } ?: 0L
+
+/** Namespaced history keys are authoritative. Older unprefixed movie rows remain readable. */
+val HistoryEntity.aniFamHistory: Boolean get() = when {
+    id.startsWith("moviebox_") -> false
+    id.startsWith("anifam_") -> true
+    else -> subjectId.startsWith("anifam_")
+}
+val HistoryEntity.titleKey: String get() = historyKey(aniFamHistory, subjectId, 0, 0)

@@ -47,8 +47,6 @@ interface MovieDao {
     @Query("DELETE FROM watch_history WHERE id = :id")
     suspend fun deleteHistoryById(id: String)
 
-    @Query("DELETE FROM watch_history WHERE subjectId = :subjectId OR subjectId = :altSubjectId OR subjectId = :cleanSubjectId")
-    suspend fun deleteHistoryBySubject(subjectId: String, altSubjectId: String, cleanSubjectId: String)
 
     @Query("SELECT * FROM watch_history WHERE id = :id LIMIT 1")
     suspend fun getHistoryById(id: String): HistoryEntity?

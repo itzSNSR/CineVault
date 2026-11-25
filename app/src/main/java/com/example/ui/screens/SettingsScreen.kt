@@ -462,6 +462,20 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
+                // Section Label: DOWNLOADS
+                Text(
+                    text = "DOWNLOADS",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextSecondary.copy(alpha = 0.8f),
+                    letterSpacing = 1.sp,
+                    modifier = Modifier.padding(start = 6.dp, bottom = 8.dp)
+                )
+
+                DownloadSettingsSection()
+
+                Spacer(modifier = Modifier.height(18.dp))
+
                 // Section Label: PREFERENCES
                 Text(
                     text = "PREFERENCES",

@@ -1,11 +1,18 @@
 {
   "name": "CineVault Android",
-  "image": "mcr.microsoft.com/devcontainers/java:1-17-bookworm",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "hostRequirements": {
     "cpus": 4,
     "memory": "8gb"
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
   "remoteEnv": {
     "ANDROID_HOME": "${containerEnv:HOME}/android-sdk",
     "ANDROID_SDK_ROOT": "${containerEnv:HOME}/android-sdk",

@@ -478,52 +478,17 @@ fun rewriteStreamJson(jsonStr: String): String {
     
     val url = parsed["url"] as? String ?: ""
     val cookie = parsed["cookie"] as? String ?: ""
-    val resolutions = parsed["resolutions"] as? String ?: ""
+
     
     val streamList = mutableListOf<Map<String, Any?>>()
     val serverStreamList = (parsed["streamList"] ?: parsed["streams"]) as? List<Map<String, Any?>>
     
-    // If serverStreamList has more than 2 items (Auto + multiple resolutions), use it directly
-    if (!serverStreamList.isNullOrEmpty() && serverStreamList.size > 2) {
-        streamList.addAll(serverStreamList)
-    } else if (url.isNotEmpty()) {
-        val parsedRes = if (resolutions.isNotEmpty()) {
-            resolutions.split(",")
-                .mapNotNull { it.trim().filter { c -> c.isDigit() }.toIntOrNull() }
-                .distinct()
-        } else {
-            emptyList()
-        }
-        val allRes = if (parsedRes.isNotEmpty()) {
-            parsedRes.sortedDescending()
-        } else {
-            listOf(1080, 720, 480)
-        }
-        
-        streamList.add(mapOf(
-            "quality" to "Auto",
-            "url" to url,
-            "size" to "Auto",
-            "cookie" to cookie
-        ))
-        for (res in allRes) {
-            val matching = serverStreamList?.find {
-                val qDigits = (it["quality"] as? String)?.filter { c -> c.isDigit() }?.toIntOrNull()
-                qDigits == res
-            }
-            val sUrl = matching?.get("url")?.toString() ?: url
-            val sCookie = matching?.get("cookie")?.toString() ?: cookie
-            streamList.add(mapOf(
-                "quality" to "${res}p",
-                "url" to sUrl,
-                "size" to (matching?.get("size")?.toString() ?: "${res}p HD"),
-                "cookie" to sCookie
-            ))
-        }
-    } else if (!serverStreamList.isNullOrEmpty()) {
-        streamList.addAll(serverStreamList)
+    if (!serverStreamList.isNullOrEmpty()) {
+        streamList.addAll(serverStreamList.filter { !it["url"]?.toString().isNullOrBlank() })
+    } else if (url.isNotBlank()) {
+        streamList.add(mapOf("quality" to "Source", "url" to url, "cookie" to cookie))
     }
-    
+
     val subtitles = (parsed["subtitles"] ?: parsed["subTitleList"]) as? List<Map<String, Any?>> ?: emptyList()
     val subTitleList = subtitles.map { sub ->
         val lan = sub["lan"] as? String ?: ""

@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
+import android.widget.Toast
 import com.example.data.local.resumePosition
 import com.example.ui.components.LiquidDots
+import com.example.ui.components.EpisodeSearchField
 import com.example.ui.components.LiquidFilterChip
 import com.example.ui.components.LiquidGlassButton
 import com.example.ui.theme.glass
@@ -64,6 +66,7 @@ import com.example.data.model.SubtitleItem
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.MovieViewModel
 import com.example.ui.viewmodel.ActiveDownload
+import com.example.util.EpisodeSearch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -77,6 +80,8 @@ import android.net.Uri
 import android.content.Intent
 import com.example.R
 import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.data.local.titleKey
+import com.example.data.local.historyKey
 import androidx.compose.ui.draw.rotate
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -84,13 +89,56 @@ import androidx.compose.ui.draw.rotate
 fun DetailScreen(viewModel: MovieViewModel) {
     val subject = viewModel.selectedSubject ?: return
     val allHistory by viewModel.historyList.collectAsState()
-    val history = allHistory.filter { it.subjectId.removePrefix("moviebox_").removePrefix("anifam_") == subject.id.removePrefix("moviebox_").removePrefix("anifam_") }
+    val history = allHistory.filter { it.titleKey == historyKey(viewModel.isAniFam, subject.id, 0, 0) }
     val last = history.firstOrNull()
     val resume = last?.takeIf { it.resumePosition > 0 }
     var expanded by remember(subject.id) { mutableStateOf(false) }
     var overflows by remember(subject.id) { mutableStateOf(false) }
+    var episodeSearchOpen by remember(subject.id) { mutableStateOf(false) }
+    var episodeQuery by remember(subject.id) { mutableStateOf("") }
     val context = LocalContext.current
     val isFav by viewModel.isFavoriteFlow(subject.id).collectAsState(false)
+    // Every Download press opens the shared configuration dialog first.
+    var downloadOptions by remember(subject.id) { mutableStateOf<com.example.data.download.DownloadOptions?>(null) }
+    var isPreparingDownload by remember(subject.id) { mutableStateOf(false) }
+    val downloadScope = rememberCoroutineScope()
+    fun openDownloadDialog(episode: Episode?) {
+        if (isPreparingDownload) return
+        isPreparingDownload = true
+        downloadScope.launch {
+            val options = runCatching { viewModel.prepareDownloadOptions(subject, episode) }.getOrNull()
+            isPreparingDownload = false
+            if (options == null) {
+                Toast.makeText(context, "Download options are unavailable for this title", Toast.LENGTH_SHORT).show()
+            } else {
+                downloadOptions = options
+            }
+        }
+    }
+
+    // Episode search is metadata-only and evaluated here, at composable level, so
+    // lazy-list scopes stay side-effect free. Typing never triggers a request.
+    val visibleEpisodes = remember(viewModel.episodesList, episodeQuery) {
+        EpisodeSearch.filter(viewModel.episodesList, episodeQuery)
+    }
+    val otherSeasonEpisodes = remember(
+        subject.seasonList,
+        viewModel.selectedSeason,
+        episodeQuery,
+        viewModel.isAniFam,
+        subject.id
+    ) {
+        if (episodeQuery.isBlank() || viewModel.isAniFam) {
+            emptyList()
+        } else {
+            EpisodeSearch.episodesFromSeasons(
+                subject.seasonList.filter {
+                    it.season != viewModel.selectedSeason && it.episodeList.isNotEmpty()
+                },
+                subject.id
+            ).let { EpisodeSearch.filter(it, episodeQuery) }.take(40)
+        }
+    }
 
     BackHandler {
         viewModel.closeDetail()
@@ -231,8 +279,7 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             icon = Icons.Filled.Download,
                             enabled = !subject.isTvShow || episode != null,
                             onClick = {
-                                if (subject.isTvShow && episode != null) viewModel.downloadSingleEpisode(context, subject, episode)
-                                else viewModel.downloadMovie(context, subject)
+                                openDownloadDialog(if (subject.isTvShow) episode else null)
                             }
                         )
                     }
@@ -316,6 +363,52 @@ fun DetailScreen(viewModel: MovieViewModel) {
 
             // TV Show Episodes List Section
             if (subject.isTvShow) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Episodes",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        IconButton(
+                            onClick = {
+                                episodeSearchOpen = !episodeSearchOpen
+                                if (!episodeSearchOpen) episodeQuery = ""
+                            },
+                            modifier = Modifier.testTag("episode_search_toggle")
+                        ) {
+                            Icon(
+                                imageVector = if (episodeSearchOpen) Icons.Filled.Close else Icons.Filled.Search,
+                                contentDescription = if (episodeSearchOpen) "Close episode search" else "Search episodes",
+                                tint = if (episodeSearchOpen) CinematicRed else TextSecondary
+                            )
+                        }
+                    }
+                    AnimatedVisibility(visible = episodeSearchOpen) {
+                        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+                            EpisodeSearchField(
+                                query = episodeQuery,
+                                onQueryChange = { episodeQuery = it },
+                                testTag = "episode_search_details"
+                            )
+                            if (episodeQuery.isNotBlank() && visibleEpisodes.isEmpty() && otherSeasonEpisodes.isEmpty()) {
+                                Text(
+                                    text = "No episodes in this season match \"$episodeQuery\"",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(top = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
                 if (viewModel.isLoadingEpisodes) {
                     item {
                         Box(
@@ -344,14 +437,18 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "No episodes available for this season",
+                                text = if (episodeQuery.isNotBlank()) {
+                                    "No episodes match \"$episodeQuery\""
+                                } else {
+                                    "No episodes available for this season"
+                                },
                                 color = TextSecondary,
                                 fontSize = 14.sp
                             )
                         }
                     }
                 } else {
-                    items(viewModel.episodesList) { ep ->
+                    items(visibleEpisodes + otherSeasonEpisodes) { ep ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -372,7 +469,11 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             Spacer(modifier = Modifier.width(16.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Episode ${ep.episodeNumber}",
+                                    text = if (ep.seasonNumber == viewModel.selectedSeason) {
+                                        "Episode ${ep.episodeNumber}"
+                                    } else {
+                                        "S${ep.seasonNumber} · Episode ${ep.episodeNumber}"
+                                    },
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = AccentAmber
@@ -391,7 +492,7 @@ fun DetailScreen(viewModel: MovieViewModel) {
                             }
                             val context = LocalContext.current
                             IconButton(
-                                onClick = { viewModel.downloadSingleEpisode(context, subject, ep) },
+                                onClick = { openDownloadDialog(ep) },
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(
@@ -507,5 +608,17 @@ fun DetailScreen(viewModel: MovieViewModel) {
                 Spacer(modifier = Modifier.height(40.dp))
             }
         }
+    }
+
+    downloadOptions?.let { options ->
+        UniversalDownloadDialog(
+            options = options,
+            resolveVariant = viewModel::downloadVariantOptions,
+            onDismiss = { downloadOptions = null },
+            onConfirm = { choice ->
+                viewModel.startDownloadSelection(context, options.subject, choice)
+                downloadOptions = null
+            }
+        )
     }
 }

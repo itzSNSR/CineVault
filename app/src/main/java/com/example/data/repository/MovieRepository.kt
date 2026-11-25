@@ -49,11 +49,6 @@ class MovieRepository(
         dao.deleteHistoryById(id)
     }
 
-    suspend fun deleteHistoryBySubject(subjectId: String) = withContext(Dispatchers.IO) {
-        val clean = subjectId.removePrefix("anifam_").removePrefix("moviebox_")
-        dao.deleteHistoryBySubject(subjectId, "anifam_$clean", clean)
-    }
-
     suspend fun getHistoryById(id: String): HistoryEntity? = withContext(Dispatchers.IO) {
         dao.getHistoryById(id)
     }
@@ -626,9 +621,10 @@ class MovieRepository(
         season: Int,
         episode: Int,
         quality: String = "1080p",
-        resourceId: String? = null
+        resourceId: String? = null,
+        aniFam: Boolean = isAniFamSubject(subjectId)
     ): PlayInfo = withContext(Dispatchers.IO) {
-        if (isAniFamSubject(subjectId)) {
+        if (aniFam) {
             val numId = parseAniFamId(subjectId) ?: return@withContext PlayInfo()
             val epId = aniFamEpisodeMap["${numId}_${episode}"]
                 ?: try {
@@ -681,13 +677,12 @@ class MovieRepository(
 
                     if (directSource.qualities.isNotEmpty()) {
                         directSource.qualities.forEach { q ->
-                            val height = q.height ?: 1080
+                            val height = q.height ?: return@forEach
                             val qLabel = "${height}p"
                             streams.add(StreamItem(quality = qLabel, url = mainUrl, cookie = cookies))
                         }
                     } else {
-                        streams.add(StreamItem(quality = "1080p", url = mainUrl, cookie = cookies))
-                        streams.add(StreamItem(quality = "720p", url = mainUrl, cookie = cookies))
+                        streams.add(StreamItem(quality = "Source", url = mainUrl, cookie = cookies))
                     }
 
                     directSource.subtitles.forEach { sub ->
